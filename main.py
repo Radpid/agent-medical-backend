@@ -14,7 +14,8 @@ from typing import List, Optional, Literal
 import httpx
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, BaseSettings, Field
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings # CORRECTION : Importation depuis pydantic_settings
 from dotenv import load_dotenv
 
 # ==============================================================================
@@ -52,7 +53,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Agent de Recherche Médicale Avancé (Simplifié)",
     description="Un agent IA pour effectuer des recherches médicales rapides ou approfondies.",
-    version="1.1.0"
+    version="1.2.0" # Version mise à jour après correction
 )
 
 try:

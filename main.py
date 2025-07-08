@@ -1,7 +1,6 @@
 # ==============================================================================
 # FICHIER 3: main.py
-# RÔLE : Fichier unique contenant TOUTE la logique de l'application.
-# Il remplace tous les anciens fichiers du dossier 'app'.
+# RÔLE : Fichier unique contenant TOUTE la logique de l'application. (Corrigé pour CORS)
 # À PLACER À LA RACINE DE VOTRE PROJET.
 # ==============================================================================
 import os
@@ -14,13 +13,13 @@ from typing import List, Optional, Literal
 import httpx
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware # CORRECTION: Importation du middleware CORS
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings # CORRECTION : Importation depuis pydantic_settings
+from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
 # ==============================================================================
 # PARTIE 1: CONFIGURATION ET INITIALISATION
-# (Remplace les fichiers dans app/core)
 # ==============================================================================
 
 # --- Configuration du Logging ---
@@ -53,7 +52,20 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Agent de Recherche Médicale Avancé (Simplifié)",
     description="Un agent IA pour effectuer des recherches médicales rapides ou approfondies.",
-    version="1.2.0" # Version mise à jour après correction
+    version="1.3.0" # Version mise à jour après correction CORS
+)
+
+# CORRECTION: Ajout du middleware CORS
+# Ceci autorise les requêtes de n'importe quelle origine.
+# Pour une meilleure sécurité en production, vous pourriez remplacer "*" par l'URL exacte de votre frontend.
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"], # Autorise toutes les méthodes (GET, POST, etc.)
+    allow_headers=["*"], # Autorise tous les en-têtes
 )
 
 try:
@@ -65,7 +77,6 @@ except Exception as e:
 
 # ==============================================================================
 # PARTIE 2: MODÈLES DE DONNÉES (PYDANTIC)
-# (Remplace les fichiers dans app/models)
 # ==============================================================================
 
 class ResearchRequest(BaseModel):
@@ -83,7 +94,6 @@ class ResearchResponse(BaseModel):
 
 # ==============================================================================
 # PARTIE 3: SERVICES EXTERNES (RECHERCHE, SCRAPING, IA)
-# (Remplace les fichiers dans app/services)
 # ==============================================================================
 
 # --- Service LLM (Gemini) ---
@@ -213,7 +223,6 @@ async def scrape_multiple_urls(urls: list[str]) -> list[dict]:
 
 # ==============================================================================
 # PARTIE 4: PIPELINES DE RECHERCHE
-# (Remplace app/services/pipeline_service.py)
 # ==============================================================================
 
 async def run_rapid_research(query: str) -> ResearchResponse:
@@ -267,7 +276,6 @@ async def run_deep_research(query: str) -> ResearchResponse:
 
 # ==============================================================================
 # PARTIE 5: ENDPOINTS DE L'API
-# (Contenu original de app/main.py)
 # ==============================================================================
 
 @app.on_event("startup")
@@ -275,7 +283,6 @@ async def startup_event():
     logger.info("Démarrage de l'application...")
     if not all([settings.GEMINI_API_KEY, settings.SERPER_API_KEY, settings.FIRECRAWL_API_KEY]):
         logger.error("FATAL: Clés API manquantes. L'application risque de ne pas fonctionner.")
-        # L'application continuera de fonctionner mais les appels API échoueront.
     else:
         logger.info("Toutes les clés API sont configurées.")
 
@@ -296,7 +303,6 @@ async def perform_research(request: ResearchRequest):
         elif request.mode == "deep":
             result = await run_deep_research(request.query)
         else:
-            # Ne devrait jamais arriver grâce à la validation Pydantic
             raise HTTPException(status_code=400, detail="Mode de recherche invalide.")
 
         logger.info(f"Recherche pour '{request.query}' terminée avec succès")

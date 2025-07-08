@@ -1,7 +1,7 @@
 # ==============================================================================
-# DATEI 2: requirements.txt
-# ROLLE: Listet die Python-Abhängigkeiten des Projekts auf.
-# IM STAMMVERZEICHNIS IHRES PROJEKTS PLATZIEREN.
+# FICHIER 2: requirements.txt
+# RÔLE : Liste les dépendances Python du projet. (Inchangé)
+# À PLACER À LA RACINE DE VOTRE PROJET.
 # ==============================================================================
 fastapi
 uvicorn[standard]
@@ -9,4 +9,4 @@ pydantic
 python-dotenv
 requests
 google-generativeai
-httpx # Für asynchrone API-Aufrufe, performanter
+httpx

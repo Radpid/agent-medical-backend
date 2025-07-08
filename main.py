@@ -1,9 +1,10 @@
 # ==============================================================================
-# FICHIER 1: main.py
-# RÔLE: Agent de recherche orchestrateur qui analyse l'intention de la requête
-#       et utilise des outils dynamiques pour fournir des réponses complètes.
-# LANGUE: Français
-# VERSION: 3.0.0
+# DATEI: main.py
+# ROLLE: Hochmoderner medizinischer Forschungs-Orchestrator, der die Absicht
+#        der Anfrage analysiert und dynamische, auf Leitlinien fokussierte
+#        Tools verwendet, um Antworten auf Facharztniveau zu liefern.
+# SPRACHE: Deutsch
+# VERSION: 4.0.0
 # ==============================================================================
 
 import os
@@ -24,10 +25,10 @@ from dotenv import load_dotenv
 from sse_starlette.sse import EventSourceResponse
 
 # ==============================================================================
-# PARTIE 1: CONFIGURATION ET INITIALISATION
+# TEIL 1: KONFIGURATION UND INITIALISIERUNG
 # ==============================================================================
 
-# --- Configuration du Logging ---
+# --- Logging-Konfiguration ---
 def setup_logging():
     log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     root_logger = logging.getLogger()
@@ -37,7 +38,7 @@ def setup_logging():
         stream_handler.setFormatter(log_formatter)
         root_logger.addHandler(stream_handler)
 
-# --- Variables d'environnement et Secrets ---
+# --- Umgebungsvariablen und Secrets ---
 load_dotenv()
 
 class Settings(BaseSettings):
@@ -52,11 +53,11 @@ settings = Settings()
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# --- Initialisation de l'application FastAPI ---
+# --- FastAPI-App-Initialisierung ---
 app = FastAPI(
-    title="Agent de Recherche Médicale Orchestrateur",
-    description="Un agent IA avancé qui comprend l'intention des questions et utilise des outils de recherche dynamiques pour des réponses précises.",
-    version="3.0.0"
+    title="Medizinischer Forschungsagent für Fachärzte",
+    description="Ein fortschrittlicher KI-Agent, der die Absicht von Anfragen versteht und dynamische, auf Leitlinien fokussierte Recherche-Tools für präzise Antworten nutzt.",
+    version="4.0.0"
 )
 
 app.add_middleware(
@@ -67,17 +68,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Initialisation du modèle Gemini ---
+# --- Gemini-Modell-Initialisierung ---
 try:
     genai.configure(api_key=settings.GEMINI_API_KEY)
     llm_model = genai.GenerativeModel('gemini-1.5-flash')
-    logger.info("Modèle Google Gemini initialisé.")
+    logger.info("Google Gemini-Modell initialisiert.")
 except Exception as e:
-    logger.error(f"Erreur de configuration de l'API Gemini : {e}")
+    logger.error(f"Fehler bei der Konfiguration der Gemini-API: {e}")
     llm_model = None
 
 # ==============================================================================
-# PARTIE 2: MODÈLES DE DONNÉES (PYDANTIC)
+# TEIL 2: DATENMODELLE (PYDANTIC)
 # ==============================================================================
 
 class ResearchRequest(BaseModel):
@@ -90,12 +91,12 @@ class Source(BaseModel):
     snippet: Optional[str] = None
 
 # ==============================================================================
-# PARTIE 3: OUTILS DE L'AGENT (RECHERCHE ET SCRAPING)
+# TEIL 3: SPEZIALISIERTE AGENTEN-WERKZEUGE
 # ==============================================================================
 
 async def web_search_tool(query: str, num_results: int = 5) -> List[Dict[str, Any]]:
-    """Outil de recherche web générale."""
-    logger.info(f"Outil de recherche web générale utilisé pour : '{query}'")
+    """Allgemeines Websuche-Werkzeug."""
+    logger.info(f"Allgemeines Websuche-Werkzeug wird für '{query}' verwendet")
     url = "https://google.serper.dev/search"
     payload = json.dumps({"q": query, "num": num_results})
     headers = {'X-API-KEY': settings.SERPER_API_KEY, 'Content-Type': 'application/json'}
@@ -105,18 +106,27 @@ async def web_search_tool(query: str, num_results: int = 5) -> List[Dict[str, An
             response.raise_for_status()
             return response.json().get('organic', [])
         except Exception as e:
-            logger.error(f"Erreur de l'outil de recherche web : {e}")
+            logger.error(f"Fehler im Websuche-Werkzeug: {e}")
             return []
 
+async def guideline_search_tool(query: str, num_results: int = 5) -> List[Dict[str, Any]]:
+    """
+    Spezialisiertes Werkzeug zur Suche nach medizinischen Leitlinien auf maßgeblichen deutschen und internationalen Portalen.
+    """
+    logger.info(f"Leitlinien-Suche-Werkzeug wird für '{query}' verwendet")
+    # Fokus auf deutsche und wichtige internationale Leitlinien-Portale
+    guideline_query = f"({query}) (site:awmf.org OR site:leitlinien.de OR site:kbv.de OR site:escardio.org OR site:nice.org.uk OR site:dgk.org)"
+    return await web_search_tool(guideline_query, num_results)
+
 async def academic_search_tool(query: str, num_results: int = 3) -> List[Dict[str, Any]]:
-    """Outil de recherche académique ciblant PubMed."""
-    logger.info(f"Outil de recherche académique utilisé pour : '{query}'")
+    """Akademisches Such-Werkzeug mit Fokus auf PubMed."""
+    logger.info(f"Akademisches Such-Werkzeug wird für '{query}' verwendet")
     pubmed_query = f"site:pubmed.ncbi.nlm.nih.gov {query}"
     return await web_search_tool(pubmed_query, num_results)
 
 async def scrape_tool(url: str) -> str:
-    """Outil de scraping robuste utilisant Firecrawl."""
-    logger.info(f"Outil de scraping (Firecrawl) utilisé pour : {url}")
+    """Robustes Scraping-Werkzeug mit Firecrawl."""
+    logger.info(f"Scraping-Werkzeug (Firecrawl) wird für '{url}' verwendet")
     api_url = "https://api.firecrawl.dev/v0/scrape"
     headers = {"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}", "Content-Type": "application/json"}
     payload = {"url": url, "pageOptions": {"onlyMainContent": True}}
@@ -129,71 +139,74 @@ async def scrape_tool(url: str) -> str:
                 return data.get("data", {}).get("markdown", "")
             return ""
         except Exception as e:
-            logger.error(f"Erreur de l'outil de scraping pour {url}: {e}")
+            logger.error(f"Fehler im Scraping-Werkzeug für {url}: {e}")
             return ""
 
 # ==============================================================================
-# PARTIE 4: LOGIQUE DE L'AGENT ORCHESTRATEUR
+# TEIL 4: LOGIK DES ORCHESTRIERUNGS-AGENTEN
 # ==============================================================================
 
 async def analyze_query_intent(user_query: str) -> Dict[str, Any]:
     """
-    Étape 1 : Analyse la question de l'utilisateur pour déterminer l'intention
-    et les requêtes de recherche appropriées.
+    Schritt 1: Analysiert die Anfrage, um die Absicht und die passenden Suchanfragen zu ermitteln.
+    Fokus liegt auf der Unterscheidung zwischen Grundlagenwissen und spezifischen klinischen Fragen.
     """
     prompt = f"""
-    Analyse la question médicale suivante de l'utilisateur : "{user_query}"
+    Analysiere die folgende medizinische Anfrage eines Arztes: "{user_query}"
 
-    Détermine l'intention principale de l'utilisateur. Les options sont :
-    - 'definition': L'utilisateur demande une définition, une explication ou des informations générales.
-    - 'clinical_data': L'utilisateur recherche des données cliniques, des études, des essais, des méta-analyses.
-    - 'treatment': L'utilisateur s'interroge sur des traitements, des protocoles ou des recommandations.
-    - 'comparison': L'utilisateur veut comparer deux ou plusieurs concepts.
+    Bestimme die primäre Absicht. Die Optionen sind:
+    - 'definition_grundlagen': Der Arzt bittet um eine Definition, eine Erklärung von Pathophysiologie, Symptomen oder Grundlagen.
+    - 'diagnostik_therapie': Die Anfrage bezieht sich auf Diagnostik, Behandlungsstrategien, Dosierungen oder Leitlinienempfehlungen.
+    - 'studien_daten': Der Arzt sucht nach spezifischen klinischen Studiendaten, Meta-Analysen oder Evidenz.
 
-    Ensuite, génère deux types de requêtes de recherche en anglais :
-    1.  `general_query`: Une requête simple et directe pour une recherche web générale (ex: "what is pulmonary embolism").
-    2.  `academic_query`: Une requête technique pour les bases de données académiques, utilisant des termes MeSH si possible (ex: "pulmonary embolism diagnosis treatment guidelines").
+    Generiere basierend auf der Absicht drei Arten von Suchanfragen auf Englisch:
+    1.  `guideline_query`: Eine Anfrage, die speziell nach offiziellen Leitlinien sucht (z.B. "AWMF S3-Leitlinie Lungenembolie").
+    2.  `general_query`: Eine breitere Anfrage für ein allgemeines Verständnis (z.B. "pulmonary embolism diagnosis and management").
+    3.  `academic_query`: Eine technische Anfrage für PubMed (z.B. "pulmonary embolism treatment new anticoagulants trial").
 
-    Retourne le résultat uniquement sous forme d'objet JSON. Exemple :
+    Gib das Ergebnis ausschließlich als JSON-Objekt zurück.
+    Beispiel:
     {{
-      "intent": "definition",
-      "general_query": "what is pulmonary embolism",
-      "academic_query": "pulmonary embolism overview and definition"
+      "intent": "diagnostik_therapie",
+      "guideline_query": "AWMF S3-Leitlinie Lungenembolie Diagnostik",
+      "general_query": "pulmonary embolism diagnostic algorithm",
+      "academic_query": "pulmonary embolism d-dimer sensitivity specificity meta-analysis"
     }}
     """
     try:
         response = await llm_model.generate_content_async(prompt)
-        # Nettoyage robuste pour extraire le JSON
         match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if match:
             return json.loads(match.group(0))
-        raise ValueError("Aucun JSON trouvé dans la réponse du LLM")
+        raise ValueError("Kein JSON in der LLM-Antwort gefunden")
     except Exception as e:
-        logger.error(f"Erreur d'analyse de l'intention : {e}. Utilisation de valeurs par défaut.")
+        logger.error(f"Fehler bei der Absichtsanalyse: {e}. Fallback wird verwendet.")
         return {
-            "intent": "definition",
+            "intent": "definition_grundlagen",
+            "guideline_query": user_query + " Leitlinie",
             "general_query": user_query,
             "academic_query": user_query
         }
 
 async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Étape 3 : Filtre et classe les sources pour ne garder que les plus pertinentes.
+    Schritt 3: Filtert und bewertet Quellen, um die relevantesten und autoritativsten zu priorisieren.
     """
     if not sources:
         return []
 
-    source_summaries = "\n".join([f"ID: {i}, Titre: {s['title']}, Snippet: {s.get('snippet', '')}" for i, s in enumerate(sources)])
+    source_summaries = "\n".join([f"ID: {i}, Titel: {s['title']}, URL: {s['link']}, Snippet: {s.get('snippet', '')}" for i, s in enumerate(sources)])
     prompt = f"""
-    Étant donné la question de l'utilisateur et une liste de sources, sélectionne les 3 à 5 sources les plus pertinentes qui répondent le mieux à la question.
-    Priorise les sources qui semblent être des définitions directes ou des articles de synthèse de haute qualité.
+    Bewerte angesichts der Benutzeranfrage und einer Liste von Quellen die 3-5 relevantesten Quellen.
+    Priorisiere Quellen von bekannten medizinischen Fachgesellschaften (AWMF, DGK, ESC) und offiziellen Leitlinien-Portalen.
+    Bevorzuge systematische Reviews und Leitlinien gegenüber einzelnen Fallberichten für allgemeine Fragen.
 
-    Question: "{user_query}"
+    Anfrage: "{user_query}"
 
-    Sources:
+    Quellen:
     {source_summaries}
 
-    Retourne uniquement une liste JSON des ID des sources les plus pertinentes. Exemple : [0, 2, 5]
+    Gib ausschließlich eine JSON-Liste der IDs der besten Quellen zurück. Beispiel: [0, 2, 5]
     """
     try:
         response = await llm_model.generate_content_async(prompt)
@@ -201,112 +214,115 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
         if match:
             best_ids = json.loads(match.group(0))
             return [sources[i] for i in best_ids if i < len(sources)]
-        return sources[:3] # Fallback
+        return sources[:3]
     except Exception as e:
-        logger.error(f"Erreur de filtrage des sources : {e}. Utilisation des 3 premières sources.")
+        logger.error(f"Fehler beim Filtern der Quellen: {e}. Die ersten 3 Quellen werden verwendet.")
         return sources[:3]
 
 async def synthesize_report_tool(user_query: str, research_data: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
-    """Étape 5 : Génère la synthèse finale à partir du contexte pertinent."""
-    context_str = "\n\n---\n\n".join([f"Source URL: {d['url']}\nContenu:\n{d['content']}" for d in research_data])
+    """
+    Schritt 5: Generiert die finale Synthese. Integriert Zitate und nutzt komplexe Markdown-Formatierungen.
+    """
+    context_str = ""
+    for i, d in enumerate(research_data):
+        context_str += f"### Quelle {i+1}: {d['title']} (URL: {d['url']})\n\n{d['content']}\n\n---\n\n"
+
     prompt = f"""
-    Tu es un assistant de recherche médicale expert. En te basant EXCLUSIVEMENT sur les informations fournies dans le contexte ci-dessous, rédige un rapport clair, structuré et précis en Markdown qui répond à la question de l'utilisateur.
+    Du bist ein deutscher Facharzt und verfasst eine präzise, evidenzbasierte Zusammenfassung für einen Kollegen.
+    Analysiere den folgenden Kontext, der aus mehreren medizinischen Quellen extrahiert wurde, um die Anfrage des Benutzers zu beantworten.
 
-    Si le contexte contient une définition claire, commence par celle-ci. Si le contexte compare des traitements, utilise un tableau.
+    **Anfrage des Arztes:** "{user_query}"
 
-    Question de l'utilisateur: "{user_query}"
+    **Deine Aufgabe:**
+    1.  **Strukturierter Bericht:** Erstelle einen Bericht mit klaren Abschnitten (z.B. Einleitung, Diagnostik, Therapie, Prognose).
+    2.  **In-Text-Zitate:** Zitiere Informationen direkt im Text unter Verwendung des Formats `[Quelle X]`, wobei X die Nummer der Quelle aus dem Kontext ist.
+    3.  **Reichhaltiges Markdown:** Nutze Markdown-Tabellen zur Darstellung von Vergleichen (z.B. Medikamentendosierungen, Studienergebnisse), Listen für Symptome oder Kriterien und Codeblöcke ` ``` für Algorithmen oder komplexe Dosierungsschemata.
+    4.  **Evidenzbasierung:** Halte dich strikt an die Informationen aus den bereitgestellten Quellen. Spekuliere nicht. Wenn Informationen fehlen, weise darauf hin.
+    5.  **Sprache:** Verfasse den gesamten Bericht auf Deutsch auf professionellem medizinischem Niveau.
 
-    Contexte fourni:
+    **Kontext aus extrahierten Quellen:**
     {context_str}
 
-    Ton rapport complet en Markdown:
+    **Dein detaillierter, zitierter Bericht im Markdown-Format:**
     """
     try:
         stream = await llm_model.generate_content_async(prompt, stream=True)
         async for chunk in stream:
             yield json.dumps({"type": "chunk", "content": chunk.text})
     except Exception as e:
-        logger.exception("Erreur lors de la synthèse du rapport.")
-        yield json.dumps({"type": "error", "content": f"Erreur lors de la création du rapport : {e}"})
+        logger.exception("Fehler bei der Berichtssynthese.")
+        yield json.dumps({"type": "error", "content": f"Fehler bei der Berichtserstellung: {e}"})
 
 # ==============================================================================
-# PARTIE 5: PIPELINE DE L'AGENT ORCHESTRATEUR
+# TEIL 5: ORCHESTRIERUNGS-PIPELINE
 # ==============================================================================
 
 async def research_orchestrator_pipeline(query: str, mode: str) -> AsyncGenerator[str, None]:
     """
-    La pipeline complète qui orchestre les différentes étapes de la recherche.
+    Die vollständige Pipeline, die die Recherche von der Analyse bis zur Synthese orchestriert.
     """
-    # Étape 1: Analyse de l'intention
-    yield json.dumps({"type": "status", "content": "Analyse de votre question..."})
+    yield json.dumps({"type": "status", "content": "Analysiere ärztliche Anfrage..."})
     intent_analysis = await analyze_query_intent(query)
     intent = intent_analysis['intent']
-    general_query = intent_analysis['general_query']
-    academic_query = intent_analysis['academic_query']
-    yield json.dumps({"type": "status", "content": f"Intention détectée : {intent}. Lancement de la recherche..."})
+    yield json.dumps({"type": "status", "content": f"Absicht erkannt: {intent}. Starte Recherche..."})
 
-    # Étape 2: Recherche d'informations (dynamique selon l'intention)
-    search_tasks = []
-    if intent in ['definition', 'treatment', 'comparison']:
-        search_tasks.append(web_search_tool(general_query, num_results=5))
-    if intent in ['clinical_data', 'treatment', 'comparison'] or mode == 'deep':
-        search_tasks.append(academic_search_tool(academic_query, num_results=5))
+    search_tasks = [
+        guideline_search_tool(intent_analysis['guideline_query'], num_results=5),
+        web_search_tool(intent_analysis['general_query'], num_results=3)
+    ]
+    if mode == 'deep' or intent == 'studien_daten':
+        search_tasks.append(academic_search_tool(intent_analysis['academic_query'], num_results=5))
     
     search_results_lists = await asyncio.gather(*search_tasks)
     all_results = [item for sublist in search_results_lists for item in sublist]
 
     if not all_results:
-        yield json.dumps({"type": "error", "content": "Aucun document trouvé pour cette requête."})
+        yield json.dumps({"type": "error", "content": "Keine Dokumente für diese Anfrage gefunden."})
         return
 
-    # Dédoublonnage des résultats
-    unique_results = {item['link']: item for item in all_results}.values()
-    yield json.dumps({"type": "status", "content": f"{len(unique_results)} sources potentielles trouvées."})
+    unique_results = list({item['link']: item for item in all_results}.values())
+    yield json.dumps({"type": "status", "content": f"{len(unique_results)} potenzielle Quellen gefunden."})
 
-    # Étape 3: Filtrage et classement des sources
-    yield json.dumps({"type": "status", "content": "Sélection des sources les plus pertinentes..."})
-    best_sources_metadata = await filter_and_rank_sources(query, list(unique_results))
+    yield json.dumps({"type": "status", "content": "Bewerte und filtere Quellen nach Relevanz..."})
+    best_sources_metadata = await filter_and_rank_sources(query, unique_results)
     
     if not best_sources_metadata:
-        yield json.dumps({"type": "error", "content": "Impossible de déterminer les sources pertinentes."})
+        yield json.dumps({"type": "error", "content": "Relevante Quellen konnten nicht bestimmt werden."})
         return
         
-    yield json.dumps({"type": "status", "content": f"Extraction du contenu de {len(best_sources_metadata)} sources clés..."})
+    yield json.dumps({"type": "status", "content": f"Extrahiere Inhalte aus {len(best_sources_metadata)} Schlüsselquellen..."})
 
-    # Étape 4: Scraping du contenu des sources pertinentes
     scrape_tasks = [scrape_tool(src['link']) for src in best_sources_metadata]
     scraped_contents = await asyncio.gather(*scrape_tasks)
 
-    research_data = []
-    final_sources = []
+    research_data, final_sources = [], []
     for i, content in enumerate(scraped_contents):
-        if content and len(content) > 50:
+        if content and len(content) > 100:
             metadata = best_sources_metadata[i]
             research_data.append({"url": metadata['link'], "title": metadata['title'], "content": content})
             final_sources.append(Source(title=metadata['title'], url=metadata['link'], snippet=metadata.get('snippet')).model_dump())
 
     if not research_data:
-        yield json.dumps({"type": "error", "content": "Le contenu des sources clés n'a pas pu être extrait."})
+        yield json.dumps({"type": "error", "content": "Inhalte der Schlüsselquellen konnten nicht extrahiert werden."})
         return
 
-    # Étape 5: Synthèse finale et streaming
-    yield json.dumps({"type": "status", "content": "Génération de la synthèse finale..."})
+    yield json.dumps({"type": "status", "content": "Erstelle evidenzbasierte Synthese..."})
     async for chunk in synthesize_report_tool(query, research_data):
         yield chunk
         
     yield json.dumps({"type": "sources", "content": final_sources})
 
 # ==============================================================================
-# PARTIE 6: ENDPOINTS DE L'API
+# TEIL 6: API-ENDPUNKTE
 # ==============================================================================
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Démarrage de l'application Orchestrateur...")
+    logger.info("Starte Orchestrator-Anwendung...")
     if not all([settings.GEMINI_API_KEY, settings.SERPER_API_KEY, settings.FIRECRAWL_API_KEY]):
-        logger.error("FATAL : Des clés API sont manquantes.")
+        logger.error("FATAL: Wichtige API-Schlüssel fehlen.")
     else:
-        logger.info("Toutes les clés API sont configurées.")
+        logger.info("Alle API-Schlüssel sind konfiguriert.")
 
 @app.get("/health", status_code=200)
 async def health_check():
@@ -314,5 +330,5 @@ async def health_check():
 
 @app.post("/research-stream")
 async def perform_research_stream(request: ResearchRequest):
-    logger.info(f"Requête de recherche reçue pour '{request.query}' en mode '{request.mode}'")
+    logger.info(f"Rechercheanfrage für '{request.query}' im Modus '{request.mode}' erhalten.")
     return EventSourceResponse(research_orchestrator_pipeline(request.query, request.mode))

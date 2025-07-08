@@ -1,8 +1,3 @@
-# ==============================================================================
-# FICHIER 1: render.yaml
-# RÔLE : Fichier de configuration pour Render. La commande de démarrage a été mise à jour.
-# À PLACER À LA RACINE DE VOTRE PROJET.
-# ==============================================================================
 services:
   - type: web
     name: agent-medical-backend-simple

@@ -3,7 +3,7 @@
 # ROLLE: Dynamischer KI-Orchestrator, der für jede Anfrage einen maßgeschneiderten,
 #        mehrstufigen Rechercheplan erstellt und ausführt.
 # SPRACHE: Deutsch
-# VERSION: 5.0.0
+# VERSION: 5.1.0
 # ==============================================================================
 
 import os
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Dynamischer Medizinischer Forschungsagent",
     description="Ein KI-Agent, der für jede Anfrage maßgeschneiderte Recherchestrategien entwickelt und ausführt, um Antworten auf Facharztniveau zu liefern.",
-    version="5.0.0"
+    version="5.1.0"
 )
 
 app.add_middleware(
@@ -206,27 +206,30 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
         return sources[:num_sources_to_select]
 
 async def synthesize_answer_tool(user_query: str, research_data: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
-    """Schritt 5: Generiert eine flexible, zitierte Antwort basierend auf der Anfrage."""
+    """Schritt 5: Generiert einen professionellen, zitierten Bericht, der auf die Nutzerfrage zugeschnitten ist."""
     context_str = ""
     for i, d in enumerate(research_data):
         context_str += f"### Quelle {i+1}: {d['title']} (URL: {d['url']})\n\n{d['content']}\n\n---\n\n"
 
     prompt = f"""
-    Du bist ein deutscher Facharzt und beantwortest präzise die Anfrage eines Kollegen.
-    Analysiere den Kontext aus den Quellen und beantworte die Frage direkt und ohne unnötige Floskeln.
+    Du bist ein deutscher Facharzt und Autor von medizinischen Fachartikeln. Deine Aufgabe ist es, einen professionellen und gut ausgearbeiteten Bericht zu verfassen, der die Anfrage eines Kollegen präzise und umfassend beantwortet.
 
     **Anfrage des Arztes:** "{user_query}"
 
-    **Deine Aufgabe:**
-    1.  **Direkte Antwort:** Beantworte die Frage des Nutzers. Erstelle keinen allgemeinen Bericht, sondern eine gezielte Antwort.
-    2.  **Format anpassen:** Wähle das beste Format für die Antwort. Nutze Tabellen für Vergleiche, Listen für Aufzählungen usw.
-    3.  **Zitieren mit Hochzahlen:** Zitiere Informationen direkt im Text mit hochgestellten Zahlen im Markdown-Format, z.B. `...Text...<sup>1</sup>`.
-    4.  **Evidenzbasiert:** Halte dich strikt an die Informationen aus den Quellen.
+    **Anweisungen für den Bericht:**
+    1.  **Professionelle Struktur:** Gliedere deine Antwort in logische Abschnitte, die zur Frage passen. Eine gute Struktur könnte sein:
+        - **Einleitung:** Fasse die Kernfrage kurz zusammen und gib einen Überblick über die Antwort.
+        - **Hauptteil:** Behandle die Hauptaspekte der Frage detailliert. Nutze hierfür aussagekräftige Unterüberschriften (z.B. "Pathophysiologie", "Diagnostische Kriterien", "Therapeutische Optionen").
+        - **Schlussfolgerung/Zusammenfassung:** Fasse die wichtigsten Punkte am Ende prägnant zusammen.
+    2.  **Fokus auf die Frage:** Der gesamte Bericht muss sich darauf konzentrieren, die spezifische Frage des Nutzers zu beantworten. Gehe in die Tiefe, aber bleibe immer relevant. Vermeide kurze, oberflächliche Antworten.
+    3.  **Formatierung auf Fachniveau:** Nutze Markdown-Tabellen für Vergleiche (z.B. Medikamentendosierungen, Studienergebnisse), Listen für Symptome oder Kriterien und Codeblöcke ` ``` für Algorithmen oder komplexe Schemata.
+    4.  **Zitieren mit Hochzahlen:** Zitiere Informationen direkt im Text mit hochgestellten Zahlen im Markdown-Format, z.B. `...Text...<sup>1</sup>`.
+    5.  **Evidenzbasiert und präzise:** Halte dich strikt an die Informationen aus den bereitgestellten Quellen.
 
     **Kontext aus extrahierten Quellen:**
     {context_str}
 
-    **Deine präzise, zitierte Antwort im Markdown-Format:**
+    **Dein professioneller, detaillierter und zitierter Bericht im Markdown-Format:**
     """
     try:
         stream = await llm_model.generate_content_async(prompt, stream=True)

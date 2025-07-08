@@ -1,0 +1,25 @@
+# ==============================================================================
+# DATEI 1: render.yaml
+# ROLLE: Konfigurationsdatei für das Deployment auf Render.com.
+# IM STAMMVERZEICHNIS IHRES PROJEKTS PLATZIEREN.
+# ==============================================================================
+services:
+  - type: web
+    name: medizin-agent-backend
+    env: python
+    region: frankfurt # Wählen Sie die Region, die Ihnen am nächsten ist
+    plan: free # Nutzt den kostenlosen Plan von Render
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: GEMINI_API_KEY
+        fromSecret: true # Der Wert wird aus den "Secrets" von Render übernommen
+      - key: SERPER_API_KEY
+        fromSecret: true # Der Wert wird aus den "Secrets" von Render übernommen
+      - key: FIRECRAWL_API_KEY
+        fromSecret: true # Der Wert wird aus den "Secrets" von Render übernommen
+
+# ==============================================================================

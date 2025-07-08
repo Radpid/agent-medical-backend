@@ -11,5 +11,3 @@ python-dotenv
 google-generativeai
 httpx
 sse-starlette
-beautifulsoup4
-lxml

@@ -1,6 +1,6 @@
 # ==============================================================================
 # FICHIER 3: main.py
-# RÔLE : Fichier unique contenant TOUTE la logique de l'application. (Corrigé pour CORS)
+# RÔLE : Fichier unique contenant TOUTE la logique de l'application. (Corrigé pour le parsing JSON)
 # À PLACER À LA RACINE DE VOTRE PROJET.
 # ==============================================================================
 import os
@@ -8,12 +8,13 @@ import sys
 import logging
 import asyncio
 import json
+import re
 from typing import List, Optional, Literal
 
 import httpx
 import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware # CORRECTION: Importation du middleware CORS
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
@@ -52,20 +53,18 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Agent de Recherche Médicale Avancé (Simplifié)",
     description="Un agent IA pour effectuer des recherches médicales rapides ou approfondies.",
-    version="1.3.0" # Version mise à jour après correction CORS
+    version="1.4.0" # Version mise à jour après correction JSON
 )
 
-# CORRECTION: Ajout du middleware CORS
-# Ceci autorise les requêtes de n'importe quelle origine.
-# Pour une meilleure sécurité en production, vous pourriez remplacer "*" par l'URL exacte de votre frontend.
+# Configuration du middleware CORS
 origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"], # Autorise toutes les méthodes (GET, POST, etc.)
-    allow_headers=["*"], # Autorise tous les en-têtes
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 try:
@@ -80,7 +79,7 @@ except Exception as e:
 # ==============================================================================
 
 class ResearchRequest(BaseModel):
-    query: str = Field(..., description="La question de l'utilisateur pour la recherche.", min_length=10)
+    query: str = Field(..., description="La question de l'utilisateur pour la recherche.")
     mode: Literal["rapid", "deep"] = Field(..., description="Le mode de recherche à utiliser.")
 
 class Source(BaseModel):
@@ -98,6 +97,23 @@ class ResearchResponse(BaseModel):
 
 # --- Service LLM (Gemini) ---
 
+def clean_and_parse_json(text: str) -> any:
+    """
+    Nettoie une chaîne de caractères pour en extraire un objet JSON valide.
+    Gère les blocs de code Markdown (```json ... ```).
+    """
+    # Utilise une expression régulière pour trouver le contenu entre ```json et ``` ou juste entre { et } ou [ et ]
+    match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text, re.DOTALL)
+    if match:
+        # Priorise le groupe json, sinon prend le contenu entier
+        json_str = match.group(1) or match.group(2)
+        try:
+            return json.loads(json_str.strip())
+        except json.JSONDecodeError as e:
+            logger.error(f"Échec final du décodage JSON après nettoyage: {e}. Contenu: '{json_str[:200]}...'")
+            return None
+    return None
+
 async def generate_text(prompt: str) -> str:
     if not llm_model:
         raise RuntimeError("Le modèle Gemini n'est pas initialisé.")
@@ -112,11 +128,12 @@ async def generate_text(prompt: str) -> str:
 
 async def generate_json_response(prompt: str, fallback: any):
     response_text = await generate_text(prompt)
-    try:
-        return json.loads(response_text.strip())
-    except json.JSONDecodeError:
-        logger.error(f"Échec du décodage JSON de Gemini. Réponse obtenue: {response_text}")
+    # CORRECTION: Utilisation de la nouvelle fonction de nettoyage
+    parsed_json = clean_and_parse_json(response_text)
+    if parsed_json is None:
+        logger.error(f"La fonction de nettoyage n'a pas pu parser le JSON. Réponse originale: {response_text}")
         return fallback
+    return parsed_json
 
 async def generate_search_queries(user_query: str) -> list[str]:
     prompt = f"""
@@ -246,6 +263,7 @@ async def run_deep_research(query: str) -> ResearchResponse:
     logger.info(f"Démarrage de la recherche APPROFONDIE pour : '{query}'")
     sub_questions = await decompose_deep_query(query)
     if not sub_questions:
+        logger.warning("Échec de la décomposition de la requête, utilisation de la requête originale comme seule sous-question.")
         sub_questions = [query]
 
     search_tasks = [perform_web_search(sq, num_results=2) for sq in sub_questions]

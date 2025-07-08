@@ -1,331 +1,373 @@
 # ==============================================================================
-# FICHIER 3: main.py
-# RÔLE : Fichier unique contenant TOUTE la logique de l'application. (Corrigé pour le parsing JSON)
-# À PLACER À LA RACINE DE VOTRE PROJET.
+# DATEI 1: main.py
+# ROLLE: Hochentwickelter medizinischer Forschungsagent mit spezialisierten
+#        Tools und Echtzeit-Status-Streaming (Server-Sent Events).
+# SPRACHE: Deutsch
 # ==============================================================================
+
 import os
 import sys
 import logging
 import asyncio
 import json
 import re
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any, AsyncGenerator
 
 import httpx
 import google.generativeai as genai
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
+from sse_starlette.sse import EventSourceResponse
+from bs4 import BeautifulSoup
 
 # ==============================================================================
-# PARTIE 1: CONFIGURATION ET INITIALISATION
+# TEIL 1: KONFIGURATION UND INITIALISIERUNG
 # ==============================================================================
 
-# --- Configuration du Logging ---
+# --- Logging-Konfiguration ---
 def setup_logging():
+    """Konfiguriert das zentrale Logging für die Anwendung."""
     log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(log_formatter)
-    root_logger.addHandler(stream_handler)
+    # Sicherstellen, dass keine doppelten Handler hinzugefügt werden
+    if not root_logger.handlers:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(log_formatter)
+        root_logger.addHandler(stream_handler)
 
-# --- Gestion des Variables d'Environnement (Secrets) ---
+# --- Umgebungsvariablen und Secrets ---
 load_dotenv()
 
 class Settings(BaseSettings):
+    """Lädt Konfigurationen und API-Schlüssel aus Umgebungsvariablen."""
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
-    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY")
-    FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY")
-    
+    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY") # Für Google Scholar / Allgemeine Suche
+
     class Config:
         env_file = ".env"
         env_file_encoding = 'utf-8'
 
 settings = Settings()
-
-# --- Initialisation de FastAPI et Gemini ---
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# --- FastAPI-App-Initialisierung ---
 app = FastAPI(
-    title="Agent de Recherche Médicale Avancé (Simplifié)",
-    description="Un agent IA pour effectuer des recherches médicales rapides ou approfondies.",
-    version="1.4.0" # Version mise à jour après correction JSON
+    title="Fortschrittlicher Medizinischer KI-Forschungsagent",
+    description="Ein KI-Agent, der spezialisierte Tools zur Durchführung von medizinischen Recherchen nutzt und Ergebnisse in Echtzeit streamt.",
+    version="2.0.0"
 )
 
-# Configuration du middleware CORS
-origins = ["*"]
-
+# --- CORS-Middleware-Konfiguration ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Für die Produktion auf die Frontend-URL beschränken
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- Gemini-Modell-Initialisierung ---
 try:
     genai.configure(api_key=settings.GEMINI_API_KEY)
     llm_model = genai.GenerativeModel('gemini-1.5-flash')
+    logger.info("Google Gemini-Modell erfolgreich initialisiert.")
 except Exception as e:
-    logger.error(f"Erreur lors de la configuration de l'API Gemini : {e}")
+    logger.error(f"Fehler bei der Konfiguration der Gemini-API: {e}")
     llm_model = None
 
 # ==============================================================================
-# PARTIE 2: MODÈLES DE DONNÉES (PYDANTIC)
+# TEIL 2: DATENMODELLE (PYDANTIC)
 # ==============================================================================
 
 class ResearchRequest(BaseModel):
-    query: str = Field(..., description="La question de l'utilisateur pour la recherche.")
-    mode: Literal["rapid", "deep"] = Field(..., description="Le mode de recherche à utiliser.")
+    """Modell für die eingehende Rechercheanfrage des Benutzers."""
+    query: str = Field(..., description="Die medizinische Frage des Benutzers.")
+    mode: Literal["rapid", "deep"] = Field(..., description="Der zu verwendende Recherchemodus: 'schnell' oder 'tiefgehend'.")
 
 class Source(BaseModel):
+    """Modell für eine einzelne Informationsquelle."""
     title: str
     url: str
     snippet: Optional[str] = None
 
-class ResearchResponse(BaseModel):
-    summary: str = Field(..., description="La synthèse générée par l'IA.")
-    sources: List[Source] = Field(..., description="La liste des sources utilisées pour la synthèse.")
+class FinalResponse(BaseModel):
+    """Modell für die endgültige, vollständige Antwort."""
+    summary: str
+    sources: List[Source]
 
 # ==============================================================================
-# PARTIE 3: SERVICES EXTERNES (RECHERCHE, SCRAPING, IA)
+# TEIL 3: SPEZIALISIERTE RECHERCHE-TOOLS
 # ==============================================================================
 
-# --- Service LLM (Gemini) ---
+async def stream_log(message: str) -> AsyncGenerator[str, None]:
+    """Sendet eine Log-Nachricht an den Client über SSE."""
+    logger.info(message)
+    yield json.dumps({"type": "status", "content": message})
 
-def clean_and_parse_json(text: str) -> any:
+async def search_google_scholar(query: str, num_results: int = 3) -> List[Dict[str, Any]]:
     """
-    Nettoie une chaîne de caractères pour en extraire un objet JSON valide.
-    Gère les blocs de code Markdown (```json ... ```).
+    Führt eine Suche auf Google Scholar über die Serper-API durch.
     """
-    # Utilise une expression régulière pour trouver le contenu entre ```json et ``` ou juste entre { et } ou [ et ]
-    match = re.search(r'```json\s*([\s\S]*?)\s*```|([\s\S]*)', text, re.DOTALL)
-    if match:
-        # Priorise le groupe json, sinon prend le contenu entier
-        json_str = match.group(1) or match.group(2)
-        try:
-            return json.loads(json_str.strip())
-        except json.JSONDecodeError as e:
-            logger.error(f"Échec final du décodage JSON après nettoyage: {e}. Contenu: '{json_str[:200]}...'")
-            return None
-    return None
-
-async def generate_text(prompt: str) -> str:
-    if not llm_model:
-        raise RuntimeError("Le modèle Gemini n'est pas initialisé.")
-    try:
-        logger.info("Génération de texte avec Gemini...")
-        response = await llm_model.generate_content_async(prompt)
-        logger.info("Texte généré avec succès.")
-        return response.text
-    except Exception as e:
-        logger.exception("Erreur lors de l'appel à l'API Gemini.")
-        raise
-
-async def generate_json_response(prompt: str, fallback: any):
-    response_text = await generate_text(prompt)
-    # CORRECTION: Utilisation de la nouvelle fonction de nettoyage
-    parsed_json = clean_and_parse_json(response_text)
-    if parsed_json is None:
-        logger.error(f"La fonction de nettoyage n'a pas pu parser le JSON. Réponse originale: {response_text}")
-        return fallback
-    return parsed_json
-
-async def generate_search_queries(user_query: str) -> list[str]:
-    prompt = f"""
-    En te basant sur la question médicale de l'utilisateur, génère 3 requêtes de recherche Google optimisées.
-    Cible des sources d'autorité (ex: site:inserm.fr, site:has-sante.fr, site:nejm.org).
-    Retourne uniquement une liste JSON de chaînes de caractères.
-    Question: "{user_query}"
-    Réponse:
-    """
-    return await generate_json_response(prompt, fallback=[user_query])
-
-async def synthesize_rapid_answer(user_query: str, contexts: list[dict]) -> str:
-    context_str = "\n\n---\n\n".join([f"Source URL: {c['url']}\n\nContenu:\n{c['content'][:5000]}" for c in contexts])
-    prompt = f"""
-    Tu es un assistant de recherche médicale. Basé EXCLUSIVEMENT sur les contextes fournis, rédige une réponse claire et concise à la question.
-    Question: "{user_query}"
-    Contextes:
-    {context_str}
-    Réponse synthétique:
-    """
-    return await generate_text(prompt)
-
-async def decompose_deep_query(user_query: str) -> list[str]:
-    prompt = f"""
-    Décompose la question de recherche médicale complexe suivante en 3 à 5 sous-questions spécifiques.
-    Retourne uniquement une liste JSON de chaînes de caractères.
-    Question: "{user_query}"
-    Réponse:
-    """
-    return await generate_json_response(prompt, fallback=[])
-
-async def extract_structured_info(content: str) -> dict:
-    prompt = f"""
-    Analyse le texte médical et extrais les informations clés en JSON: "study_type", "key_findings" (liste), "main_conclusion".
-    Si une info manque, mets la valeur à null.
-    Texte:
-    ---
-    {content[:8000]}
-    ---
-    JSON structuré:
-    """
-    return await generate_json_response(prompt, fallback={})
-
-async def synthesize_deep_report(user_query: str, structured_infos: list[dict]) -> str:
-    context_str = "\n\n---\n\n".join([json.dumps(info, indent=2, ensure_ascii=False) for info in structured_infos])
-    prompt = f"""
-    Tu es un expert en synthèses médicales. Basé EXCLUSIVEMENT sur les résumés structurés fournis, rédige un rapport complet répondant à la question.
-    Structure ta réponse. Mets en évidence convergences et divergences.
-    Question: "{user_query}"
-    Résumés:
-    {context_str}
-    Rapport de recherche approfondi:
-    """
-    return await generate_text(prompt)
-
-# --- Service de Recherche Web (Serper) ---
-
-async def perform_web_search(query: str, num_results: int = 5) -> list:
-    logger.info(f"Exécution de la recherche web pour : '{query}'")
-    url = "https://google.serper.dev/search"
-    payload = {"q": query, "num": num_results}
+    logger.info(f"Führe Google Scholar-Suche durch für: '{query}'")
+    url = "https://google.serper.dev/scholar"
+    payload = json.dumps({"q": query, "num": num_results})
     headers = {'X-API-KEY': settings.SERPER_API_KEY, 'Content-Type': 'application/json'}
-    
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(url, json=payload, headers=headers, timeout=10)
+            response = await client.post(url, data=payload, headers=headers, timeout=15)
             response.raise_for_status()
-            search_results = response.json()
-            return search_results.get('organic', [])
+            results = response.json()
+            return results.get('scholar', [])
         except httpx.HTTPStatusError as e:
-            logger.error(f"Erreur HTTP Serper: {e.response.status_code}")
+            logger.error(f"HTTP-Fehler bei Google Scholar-Suche: {e.response.status_code} - {e.response.text}")
             return []
         except Exception as e:
-            logger.exception("Erreur inattendue dans perform_web_search.")
+            logger.exception("Unerwarteter Fehler bei der Google Scholar-Suche.")
             return []
 
-# --- Service de Scraping (Firecrawl) ---
+async def search_pubmed(query: str, num_results: int = 3) -> List[Dict[str, Any]]:
+    """
+    Simuliert eine Suche auf PubMed, indem eine gezielte Google-Suche verwendet wird.
+    Eine direkte PubMed-API (z.B. Entrez) wäre eine robustere Alternative.
+    """
+    logger.info(f"Führe PubMed-Suche durch für: '{query}'")
+    pubmed_query = f"site:pubmed.ncbi.nlm.nih.gov {query}"
+    url = "https://google.serper.dev/search"
+    payload = json.dumps({"q": pubmed_query, "num": num_results})
+    headers = {'X-API-KEY': settings.SERPER_API_KEY, 'Content-Type': 'application/json'}
 
-async def scrape_url(url: str) -> str:
-    logger.info(f"Scraping de l'URL : {url}")
-    api_url = "https://api.firecrawl.dev/v0/scrape"
-    headers = {"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}", "Content-Type": "application/json"}
-    payload = {"url": url}
-    
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(api_url, json=payload, headers=headers, timeout=30)
+            response = await client.post(url, data=payload, headers=headers, timeout=15)
             response.raise_for_status()
-            scraped_data = response.json()
-            if scraped_data.get("success"):
-                return scraped_data.get("data", {}).get("markdown", "")
-            return ""
+            results = response.json()
+            return results.get('organic', [])
         except httpx.HTTPStatusError as e:
-            logger.error(f"Erreur HTTP Firecrawl pour {url}: {e.response.status_code}")
-            return ""
+            logger.error(f"HTTP-Fehler bei PubMed-Suche: {e.response.status_code} - {e.response.text}")
+            return []
         except Exception as e:
-            logger.exception(f"Erreur inattendue lors du scraping de {url}.")
+            logger.exception("Unerwarteter Fehler bei der PubMed-Suche.")
+            return []
+
+async def scrape_url_content(url: str) -> str:
+    """
+    Extrahiert den reinen Textinhalt von einer Webseite mit BeautifulSoup.
+    """
+    logger.info(f"Scraping der URL: {url}")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        try:
+            response = await client.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'lxml')
+            
+            # Entfernt Skript- und Stil-Elemente
+            for script_or_style in soup(["script", "style"]):
+                script_or_style.decompose()
+            
+            # Holt den Text und bereinigt ihn
+            text = soup.get_text()
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text = '\n'.join(chunk for chunk in chunks if chunk)
+            
+            logger.info(f"Scraping von {url} erfolgreich. Länge: {len(text)} Zeichen.")
+            return text[:15000] # Begrenzt die Inhaltslänge
+        except Exception as e:
+            logger.error(f"Fehler beim Scrapen von {url}: {e}")
             return ""
 
-async def scrape_multiple_urls(urls: list[str]) -> list[dict]:
-    tasks = [scrape_url(url) for url in urls]
-    contents = await asyncio.gather(*tasks)
-    return [{"url": url, "content": content} for url, content in zip(urls, contents) if content]
-
 # ==============================================================================
-# PARTIE 4: PIPELINES DE RECHERCHE
+# TEIL 4: KI-LOGIK UND SYNTHESE
 # ==============================================================================
 
-async def run_rapid_research(query: str) -> ResearchResponse:
-    logger.info(f"Démarrage de la recherche RAPIDE pour : '{query}'")
-    search_queries = await generate_search_queries(query)
-    search_results = await perform_web_search(search_queries[0], num_results=3)
-    if not search_results:
-        return ResearchResponse(summary="Désolé, je n'ai pas pu effectuer la recherche web.", sources=[])
+async def get_refined_queries(user_query: str) -> Dict[str, str]:
+    """
+    Generiert optimierte Suchanfragen für verschiedene Datenbanken.
+    """
+    prompt = f"""
+    Basierend auf der medizinischen Anfrage eines Benutzers, erstelle optimierte, englische Suchanfragen für die folgenden Datenbanken:
+    1.  **PubMed**: Eine präzise, fachliche Anfrage, die sich auf klinische Studien, Reviews oder Meta-Analysen konzentriert. Verwende ggf. MeSH-ähnliche Begriffe.
+    2.  **Google Scholar**: Eine etwas breitere Anfrage, die auch nach Artikeln, Leitlinien und Zitationen sucht.
 
-    urls_to_scrape = [r['link'] for r in search_results]
-    scraped_contents = await scrape_multiple_urls(urls_to_scrape)
-    if not scraped_contents:
-        return ResearchResponse(summary="Désolé, je n'ai pas pu extraire le contenu des pages web.", sources=[])
+    Benutzeranfrage: "{user_query}"
 
-    summary = await synthesize_rapid_answer(query, scraped_contents)
-    sources = [Source(title=r['title'], url=r['link'], snippet=r.get('snippet')) for r in search_results]
-    return ResearchResponse(summary=summary, sources=sources)
+    Gib die Antwort ausschließlich als JSON-Objekt im folgenden Format zurück:
+    {{
+      "pubmed_query": "...",
+      "scholar_query": "..."
+    }}
+    """
+    try:
+        response = await llm_model.generate_content_async(prompt)
+        # Bereinigen und Parsen der JSON-Antwort
+        json_str = re.search(r'```json\s*([\s\S]*?)\s*```', response.text)
+        if json_str:
+            return json.loads(json_str.group(1))
+        return json.loads(response.text)
+    except Exception as e:
+        logger.error(f"Fehler beim Verfeinern der Suchanfragen: {e}. Fallback wird verwendet.")
+        return {"pubmed_query": user_query, "scholar_query": user_query}
 
-
-async def run_deep_research(query: str) -> ResearchResponse:
-    logger.info(f"Démarrage de la recherche APPROFONDIE pour : '{query}'")
-    sub_questions = await decompose_deep_query(query)
-    if not sub_questions:
-        logger.warning("Échec de la décomposition de la requête, utilisation de la requête originale comme seule sous-question.")
-        sub_questions = [query]
-
-    search_tasks = [perform_web_search(sq, num_results=2) for sq in sub_questions]
-    search_results_list = await asyncio.gather(*search_tasks)
+async def synthesize_final_report(user_query: str, research_data: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
+    """
+    Erstellt einen detaillierten, strukturierten Bericht aus den gesammelten Daten und streamt ihn.
+    """
+    context_str = "\n\n---\n\n".join(
+        [f"Quelle URL: {d['url']}\n\nTitel: {d['title']}\n\nInhalt:\n{d['content']}" for d in research_data]
+    )
     
-    all_search_results = []
-    all_urls_to_scrape = set()
-    for results in search_results_list:
-        for r in results:
-            if r['link'] not in all_urls_to_scrape:
-                all_urls_to_scrape.add(r['link'])
-                all_search_results.append(r)
-    
-    if not all_urls_to_scrape:
-        return ResearchResponse(summary="Désolé, la recherche approfondie n'a retourné aucun résultat.", sources=[])
+    prompt = f"""
+    Du bist ein Experte für medizinische Forschung und verfasst detaillierte Synthesen für Ärzte.
+    Basierend AUSSCHLIESSLICH auf den untenstehenden, extrahierten Inhalten, erstelle einen umfassenden und gut strukturierten Bericht, der die folgende Frage beantwortet.
 
-    scraped_contents = await scrape_multiple_urls(list(all_urls_to_scrape))
-    extraction_tasks = [extract_structured_info(c['content']) for c in scraped_contents]
-    structured_infos = await asyncio.gather(*extraction_tasks)
-    
-    valid_infos = [info for info in structured_infos if info]
-    if not valid_infos:
-        return ResearchResponse(summary="Je n'ai pas pu extraire d'informations structurées des documents trouvés.", sources=[])
+    **Anfrage des Benutzers:**
+    {user_query}
 
-    summary = await synthesize_deep_report(query, valid_infos)
-    sources = [Source(title=r['title'], url=r['link'], snippet=r.get('snippet')) for r in all_search_results]
-    return ResearchResponse(summary=summary, sources=sources)
+    **Struktur des Berichts:**
+    1.  **Zusammenfassung (Executive Summary):** Gib eine kurze, prägnante Antwort auf die Kernfrage.
+    2.  **Detaillierte Ergebnisse:** Fasse die wichtigsten Erkenntnisse aus den Quellen zusammen. Wenn möglich, erstelle eine Markdown-Tabelle, um Studien, Dosierungen, Ergebnisse oder andere relevante Daten zu vergleichen.
+    3.  **Diskussion und Limitationen:** Erwähne kurz, wenn es widersprüchliche Daten gibt oder welche Limitationen in den Quellen genannt werden.
+    4.  **Schlussfolgerung:** Formuliere eine abschließende Schlussfolgerung.
+
+    **WICHTIG:**
+    -   Formatiere deine Antwort durchgehend in Markdown.
+    -   Sei objektiv und halte dich strikt an die bereitgestellten Informationen.
+    -   Erfinde keine Informationen hinzu. Wenn die Daten fehlen, erwähne dies.
+
+    **Gesammelte Daten:**
+    {context_str}
+
+    **Dein Bericht:**
+    """
+    try:
+        stream = await llm_model.generate_content_async(prompt, stream=True)
+        async for chunk in stream:
+            yield json.dumps({"type": "chunk", "content": chunk.text})
+    except Exception as e:
+        logger.exception("Fehler während der finalen Synthese.")
+        yield json.dumps({"type": "error", "content": f"Fehler bei der Berichtserstellung: {e}"})
 
 # ==============================================================================
-# PARTIE 5: ENDPOINTS DE L'API
+# TEIL 5: RECHERCHE-PIPELINE (STREAMING)
+# ==============================================================================
+
+async def research_pipeline(query: str, mode: str) -> AsyncGenerator[str, None]:
+    """
+    Die zentrale Pipeline, die den gesamten Rechercheprozess steuert und streamt.
+    """
+    yield json.dumps({"type": "status", "content": "Anfrage wird analysiert..."})
+    
+    # Schritt 1: Suchanfragen verfeinern
+    refined_queries = await get_refined_queries(query)
+    yield json.dumps({"type": "status", "content": f"Spezialisierte Suchanfragen erstellt (PubMed: '{refined_queries['pubmed_query']}')"})
+    
+    # Schritt 2: Parallele Suche
+    yield json.dumps({"type": "status", "content": "Suche in medizinischen Datenbanken wird gestartet..."})
+    
+    num_results = 5 if mode == 'deep' else 2
+    pubmed_task = asyncio.create_task(search_pubmed(refined_queries['pubmed_query'], num_results))
+    scholar_task = asyncio.create_task(search_google_scholar(refined_queries['scholar_query'], num_results))
+    
+    pubmed_results, scholar_results = await asyncio.gather(pubmed_task, scholar_task)
+    
+    all_results = pubmed_results + scholar_results
+    if not all_results:
+        yield json.dumps({"type": "error", "content": "Keine relevanten Dokumente in den Datenbanken gefunden."})
+        return
+
+    # Eindeutige URLs und Titel sammeln
+    unique_sources = {}
+    for res in all_results:
+        if res.get('link'):
+            unique_sources[res['link']] = Source(
+                title=res.get('title', 'Unbekannter Titel'),
+                url=res['link'],
+                snippet=res.get('snippet')
+            )
+    
+    sources_list = list(unique_sources.values())
+    yield json.dumps({"type": "status", "content": f"{len(sources_list)} einzigartige Quellen gefunden."})
+    
+    # Schritt 3: Paralleles Scraping
+    yield json.dumps({"type": "status", "content": "Extrahiere Inhalte der gefundenen Quellen..."})
+    scrape_tasks = [asyncio.create_task(scrape_url_content(src.url)) for src in sources_list]
+    scraped_contents = await asyncio.gather(*scrape_tasks)
+    
+    # Schritt 4: Daten für die Synthese vorbereiten
+    research_data = []
+    valid_sources = []
+    for i, content in enumerate(scraped_contents):
+        if content and len(content) > 100: # Nur Inhalte mit einer Mindestlänge berücksichtigen
+            research_data.append({
+                "url": sources_list[i].url,
+                "title": sources_list[i].title,
+                "content": content
+            })
+            valid_sources.append(sources_list[i].model_dump())
+
+    if not research_data:
+        yield json.dumps({"type": "error", "content": "Inhalte der gefundenen Quellen konnten nicht extrahiert werden."})
+        return
+        
+    yield json.dumps({"type": "status", "content": f"Inhalte von {len(research_data)} Quellen werden analysiert. Synthese wird gestartet..."})
+
+    # Schritt 5: Finale Synthese und Streaming der Antwort
+    async for chunk in synthesize_final_report(query, research_data):
+        yield chunk
+        
+    # Schritt 6: Quellen senden
+    yield json.dumps({"type": "sources", "content": valid_sources})
+
+
+# ==============================================================================
+# TEIL 6: API-ENDPUNKTE
 # ==============================================================================
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Démarrage de l'application...")
-    if not all([settings.GEMINI_API_KEY, settings.SERPER_API_KEY, settings.FIRECRAWL_API_KEY]):
-        logger.error("FATAL: Clés API manquantes. L'application risque de ne pas fonctionner.")
+    """Wird beim Start der Anwendung ausgeführt."""
+    logger.info("Anwendung startet...")
+    if not all([settings.GEMINI_API_KEY, settings.SERPER_API_KEY]):
+        logger.error("FATAL: Wichtige API-Schlüssel fehlen. Die Anwendung wird nicht korrekt funktionieren.")
     else:
-        logger.info("Toutes les clés API sont configurées.")
+        logger.info("Alle erforderlichen API-Schlüssel sind konfiguriert.")
 
-@app.get("/health", status_code=200, tags=["Surveillance"])
+@app.get("/health", status_code=200, tags=["System"])
 async def health_check():
-    """Endpoint de santé pour la surveillance par Render."""
-    return {"status": "ok"}
+    """Gesundheits-Check-Endpunkt für Monitoring-Dienste."""
+    return {"status": "ok", "version": app.version}
 
-@app.post("/research", response_model=ResearchResponse, tags=["Recherche"])
-async def perform_research(request: ResearchRequest):
+@app.post("/research", tags=["Veraltet"])
+async def perform_research_legacy(request: ResearchRequest):
+    """Veralteter Endpunkt. Bitte /research-stream verwenden."""
+    raise HTTPException(status_code=410, detail="Dieser Endpunkt ist veraltet. Bitte verwenden Sie den '/research-stream'-Endpunkt.")
+
+
+@app.post("/research-stream", tags=["Recherche"])
+async def perform_research_stream(request: ResearchRequest):
     """
-    Lance une tâche de recherche en mode 'rapide' ou 'approfondi'.
+    Startet eine Recherche und streamt den Fortschritt und die Ergebnisse
+    über Server-Sent Events (SSE).
     """
-    logger.info(f"Requête de recherche reçue pour '{request.query}' en mode '{request.mode}'")
-    try:
-        if request.mode == "rapid":
-            result = await run_rapid_research(request.query)
-        elif request.mode == "deep":
-            result = await run_deep_research(request.query)
-        else:
-            raise HTTPException(status_code=400, detail="Mode de recherche invalide.")
+    logger.info(f"Streaming-Rechercheanfrage erhalten für '{request.query}' im Modus '{request.mode}'")
+    
+    async def event_generator():
+        try:
+            async for data_str in research_pipeline(request.query, request.mode):
+                yield {"data": data_str}
+        except Exception as e:
+            logger.exception(f"Ein Fehler ist in der research_pipeline aufgetreten: {e}")
+            error_message = json.dumps({"type": "error", "content": f"Ein interner Serverfehler ist aufgetreten: {e}"})
+            yield {"data": error_message}
 
-        logger.info(f"Recherche pour '{request.query}' terminée avec succès")
-        return result
+    return EventSourceResponse(event_generator())
 
-    except Exception as e:
-        logger.exception(f"Une erreur inattendue est survenue lors de la recherche pour '{request.query}'")
-        raise HTTPException(status_code=500, detail=f"Une erreur interne du serveur est survenue: {str(e)}")

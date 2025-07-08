@@ -6,8 +6,10 @@
 fastapi
 uvicorn[standard]
 pydantic
-pydantic-settings # CORRECTION : Ajout de la dépendance manquante
+pydantic-settings
 python-dotenv
-requests
 google-generativeai
 httpx
+sse-starlette
+beautifulsoup4
+lxml

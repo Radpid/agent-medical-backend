@@ -60,8 +60,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 try:
     json_generation_config = genai.GenerationConfig(response_mime_type="application/json")
-    llm_json_model = genai.GenerativeModel('gemini-1.5-flash', generation_config=json_generation_config)
-    llm_text_model = genai.GenerativeModel('gemini-1.5-flash')
+    llm_json_model = genai.GenerativeModel('gemini-2.5-flash', generation_config=json_generation_config)
+    llm_text_model = genai.GenerativeModel('gemini-2.5-flash')
     logger.info("Google Gemini-Modelle initialisiert.")
 except Exception as e:
     logger.error(f"Fehler bei der Konfiguration der Gemini-API: {e}")

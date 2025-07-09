@@ -4,10 +4,10 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Die asynchrone Logik wurde überarbeitet, um den Fehler
-#            "async_generator can't be used in 'await' expression" zu beheben.
+# KORREKTUR: Der Prompt für die Planerstellung wurde präzisiert, um den
+#            KeyError: 'description' zu beheben.
 # SPRACHE: Deutsch
-# VERSION: 7.1.0
+# VERSION: 7.2.0
 # ==============================================================================
 
 import os
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.1.0"
+    version="7.2.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -118,7 +118,19 @@ async def generate_dynamic_search_plan(user_query: str, mode: str) -> List[Dict[
     Anfrage: "{user_query}"
     Anweisungen: {mode_instruction}
     Definiere für jeden Schritt ein Werkzeug (`guideline_search`, `academic_search`, `web_search`) und zweisprachige Suchanfragen (`query_de`, `query_en`).
-    Gib das Ergebnis ausschließlich als JSON-Array von Objekten zurück.
+    Gib das Ergebnis ausschließlich als JSON-Array von Objekten zurück, das dem folgenden Schema entspricht:
+    
+    ```json
+    [
+      {{
+        "step": 1,
+        "description": "Eine kurze Beschreibung des Recherche-Schritts.",
+        "tool": "werkzeug_name",
+        "query_de": "deutsche_suchanfrage",
+        "query_en": "englische_suchanfrage"
+      }}
+    ]
+    ```
     """
     response = await llm_json_model.generate_content_async(prompt)
     return json.loads(response.text)
@@ -212,11 +224,14 @@ async def base_pipeline(query: str, mode: str) -> AsyncGenerator[Dict[str, Any],
         all_step_results = [item for sublist in results for item in sublist]
         
         if all_step_results:
-            top_source_url = all_step_results[0]['link']
-            content = await scrape_tool(top_source_url)
-            if content:
-                node_name = step['description']
-                knowledge_graph[node_name] = {"content": content, "sources": [top_source_url]}
+            # Anstatt nur die erste Quelle zu nehmen, filtern wir die besten
+            best_sources_for_step = await filter_and_rank_sources(step['description'], all_step_results, 'rapid') # 'rapid' mode to get 1-2 best sources
+            if best_sources_for_step:
+                top_source_url = best_sources_for_step[0]['link']
+                content = await scrape_tool(top_source_url)
+                if content:
+                    node_name = step['description']
+                    knowledge_graph[node_name] = {"content": content, "sources": [top_source_url]}
 
     if not knowledge_graph:
         yield {"type": "error", "content": "Keine Informationen gefunden oder Inhalte konnten nicht extrahiert werden."}

@@ -1,12 +1,12 @@
 # ==============================================================================
 # DATEI: main.py
 # ROLLE: Eine hochmoderne "KI über KI"-Architektur. Ein Master-Agent erstellt
-#        dynamische Prompts und maßgeschneiderte Pläne für untergeordnete
-#        Worker-Agenten. Diese Architektur ermöglicht eine beispiellose
-#        Flexibilität und kann sowohl komplexe Recherchen als auch allgemeine
-#        Textgenerierungsaufgaben bewältigen.
+#        dynamische Prompts und maßgeschneiderte Pläne für eine Brigade von
+#        spezialisierten Worker-Agenten. Diese Architektur ermöglicht eine
+#        beispiellose Flexibilität und kann sowohl komplexe Recherchen als
+#        auch allgemeine Textgenerierungsaufgaben bewältigen.
 # SPRACHE: Deutsch
-# VERSION: 9.0.0
+# VERSION: 9.1.0
 # LINIEN: > 1500
 # ==============================================================================
 
@@ -21,6 +21,7 @@ import asyncio
 import json
 import re
 from typing import List, Optional, Literal, Dict, Any, AsyncGenerator, Union
+from abc import ABC, abstractmethod
 
 # Externe Bibliotheken
 import httpx
@@ -86,7 +87,7 @@ except ValidationError as e:
 app = FastAPI(
     title="Medizinischer Agent mit 'KI über KI'-Architektur",
     description="Ein Master-KI-Agent steuert Worker-Agenten, um komplexe medizinische Anfragen mit dynamischen Strategien zu beantworten.",
-    version="9.0.0",
+    version="9.1.0",
     contact={
         "name": "Entwickler-Team",
         "url": "http://beispiel.com/kontakt",
@@ -110,7 +111,7 @@ app.add_middleware(
 # ==============================================================================
 try:
     # Konfiguration für das Master-Modell (erlaubt Textausgabe)
-    llm_master_agent = genai.GenerativeModel(settings.MASTER_AGENT_MODEL)
+    llm_master_agent_model = genai.GenerativeModel(settings.MASTER_AGENT_MODEL)
     
     # Konfiguration für Worker-Modelle (erlaubt Text- und JSON-Ausgabe)
     json_generation_config = genai.GenerationConfig(response_mime_type="application/json")
@@ -120,7 +121,7 @@ try:
     logger.info(f"Google Gemini-Modelle initialisiert: Master ({settings.MASTER_AGENT_MODEL}), Worker ({settings.WORKER_AGENT_MODEL})")
 except Exception as e:
     logger.critical(f"FATALER FEHLER bei der Konfiguration der Gemini-API: {e}")
-    llm_master_agent, llm_worker_json_model, llm_worker_text_model = None, None, None
+    llm_master_agent_model, llm_worker_json_model, llm_worker_text_model = None, None, None
 
 # ==============================================================================
 # TEIL 5: BENUTZERDEFINIERTE EXCEPTION-KLASSEN
@@ -164,13 +165,6 @@ class ToolBelt:
     async def execute_search(queries: List[str], site_filter: str = "") -> List[Dict[str, Any]]:
         """
         Führt parallele Websuchen für eine Liste von Anfragen durch.
-
-        Args:
-            queries: Eine Liste von Suchbegriffen.
-            site_filter: Ein optionaler Filter, um die Suche auf bestimmte Websites zu beschränken.
-
-        Returns:
-            Eine Liste von organischen Suchergebnissen.
         """
         logger.info(f"Führe Suchen aus für: {queries} mit Filter '{site_filter}'")
         async with httpx.AsyncClient() as client:
@@ -196,12 +190,6 @@ class ToolBelt:
     async def scrape_content(urls: List[str]) -> List[Dict[str, str]]:
         """
         Scraped parallel den Inhalt von mehreren URLs.
-
-        Args:
-            urls: Eine Liste von URLs, die gescraped werden sollen.
-
-        Returns:
-            Eine Liste von Dictionaries, die die URL und den extrahierten Inhalt enthalten.
         """
         logger.info(f"Scraping von {len(urls)} URLs wird gestartet...")
         async with httpx.AsyncClient() as client:
@@ -232,21 +220,26 @@ class ToolBelt:
 # TEIL 8: ARCHITEKTUR DER KI-AGENTEN
 # ==============================================================================
 
-class MasterAgent:
-    """
-    Der strategische Leiter der Operation. Analysiert die Anfrage und delegiert
-    Aufgaben an die Worker-Agenten, indem er maßgeschneiderte Pläne erstellt.
-    """
+class Agent(ABC):
+    """Abstrakte Basisklasse für alle Agenten."""
     def __init__(self, model):
         self.model = model
+    
+    @abstractmethod
+    async def execute(self, *args, **kwargs) -> Any:
+        pass
 
-    async def create_plan(self, user_query: str, mode: str, context: Optional[str]) -> Dict[str, Any]:
+class MasterAgent(Agent):
+    """
+    Der strategische Leiter. Analysiert die Anfrage und delegiert Aufgaben,
+    indem er maßgeschneiderte Pläne erstellt.
+    """
+    async def execute(self, user_query: str, mode: str, context: Optional[str]) -> Dict[str, Any]:
         """
         Analysiert die Nutzeranfrage und erstellt einen hochflexiblen, mehrstufigen Plan.
         """
         logger.info(f"Master-Agent erstellt einen Plan für die Anfrage: '{user_query[:50]}...' im Modus '{mode}'")
         
-        # Bestimme die Art der Aufgabe (Recherche vs. Generierung)
         task_type = "generative_task" if context else "research_task"
         
         mode_instruction = (
@@ -255,7 +248,6 @@ class MasterAgent:
             else "Der Arzt benötigt eine schnelle, präzise Antwort. Erstelle einen effizienten 2-Phasen-Plan."
         )
 
-        # Wähle den passenden Prompt-Generator
         if task_type == "research_task":
             prompt = self._create_research_plan_prompt(user_query, mode_instruction)
         else:
@@ -282,10 +274,13 @@ class MasterAgent:
         **Anweisung:** {mode_instruction}
 
         **Deine Aufgaben:**
-        1.  **Plan-Struktur:** Definiere die Phasen der Recherche (z.B. Grundlagen, Leitlinien, Studien, Synthese).
-        2.  **Worker-Anweisungen:** Formuliere für jede Phase einen präzisen Prompt für den zuständigen Worker-Agenten.
-            -   Für `research_worker`: Gib genaue Anweisungen, welche Art von Informationen und welche Suchbegriffe (DE/EN) gesucht werden sollen.
-            -   Für `synthesis_worker`: Gib Anweisungen zur Strukturierung der JSON-Antwort, einschließlich kreativer Elemente, die zur Anfrage passen.
+        1.  **Worker-Typen:** Du hast folgende Worker zur Verfügung: `research_worker`, `filter_worker`, `extraction_worker`, `synthesis_worker`.
+        2.  **Plan-Struktur:** Definiere die Phasen der Recherche. Jede Phase muss einen Worker und einen präzisen Prompt für diesen Worker enthalten.
+        3.  **Worker-Anweisungen:**
+            -   `research_worker`: Gib genaue Suchbegriffe (DE/EN) an.
+            -   `filter_worker`: Weise ihn an, die besten Quellen auszuwählen.
+            -   `extraction_worker`: Weise ihn an, relevante Informationen aus dem gescrapten Text zu extrahieren.
+            -   `synthesis_worker`: Gib Anweisungen zur Strukturierung der finalen JSON-Antwort.
         
         **Ausgabeformat:** Gib den Plan ausschließlich als JSON-Objekt zurück.
         
@@ -294,12 +289,20 @@ class MasterAgent:
         {{
           "plan": [
             {{
-              "phase": 1, "description": "Grundlagen und Leitlinien-Recherche", "worker": "research_worker",
-              "prompt": "Führe eine gezielte Suche nach den neuesten deutschen (AWMF) und europäischen (ESC) Leitlinien zum Thema '{user_query}' durch. Suchbegriffe (DE): ['{user_query} S3-Leitlinie']. Suchbegriffe (EN): ['{user_query} guidelines ESC']."
+              "phase": 1, "description": "Leitlinien-Recherche", "worker": "research_worker",
+              "prompt": "Führe eine gezielte Suche nach Leitlinien zum Thema '{user_query}' durch. Suchbegriffe (DE): ['{user_query} S3-Leitlinie']. Suchbegriffe (EN): ['{user_query} guidelines ESC']."
             }},
             {{
-              "phase": 2, "description": "Finale Synthese und JSON-Erstellung", "worker": "synthesis_worker",
-              "prompt": "Analysiere den gesamten gesammelten Kontext zur Anfrage '{user_query}'. Erstelle eine detaillierte, strukturierte JSON-Antwort. Beginne mit einer prägnanten Zusammenfassung. Erstelle dann einen detaillierten Teil mit einem Abschnitt zu den Leitlinien-Empfehlungen. Zitiere alle Informationen."
+              "phase": 2, "description": "Quellen filtern", "worker": "filter_worker",
+              "prompt": "Filtere die Suchergebnisse und wähle die 3 autoritativsten Leitlinien aus."
+            }},
+            {{
+              "phase": 3, "description": "Inhalte extrahieren", "worker": "extraction_worker",
+              "prompt": "Extrahiere aus den gescrapten Leitlinien die Abschnitte zur Diagnostik und Therapie."
+            }},
+            {{
+              "phase": 4, "description": "Finale Synthese", "worker": "synthesis_worker",
+              "prompt": "Erstelle eine detaillierte JSON-Antwort zur Anfrage '{user_query}'. Nutze die extrahierten Informationen, um einen diagnostischen Algorithmus als Mermaid-Diagramm und eine Tabelle mit Therapieoptionen zu erstellen."
             }}
           ]
         }}
@@ -307,56 +310,41 @@ class MasterAgent:
         """.replace("{user_query}", user_query)
 
     def _create_generative_plan_prompt(self, user_query: str, context: str) -> str:
-        """Erstellt den Prompt für eine generative Aufgabe (z.B. Korrektur, Zusammenfassung)."""
+        """Erstellt den Prompt für eine generative Aufgabe."""
         return f"""
-        Du bist der Master-Agent einer Textverarbeitungs-Einheit. Deine Aufgabe ist es, eine Anfrage zur Bearbeitung eines Textes zu analysieren.
-
+        Du bist der Master-Agent einer Textverarbeitungs-Einheit.
         **Anweisung des Benutzers:** "{user_query}"
         **Zu bearbeitender Text:** "{context}"
-
-        **Deine Aufgaben:**
-        1.  **Plan-Struktur:** Erstelle einen Ein-Phasen-Plan.
-        2.  **Worker-Anweisung:** Formuliere einen präzisen Prompt für den `generative_worker`, der genau beschreibt, wie der Text zu bearbeiten ist (z.B. "Korrigiere die Grammatik und Rechtschreibung des folgenden Textes", "Fasse den folgenden Text auf 3 Kernaussagen zusammen").
-        
+        **Aufgabe:** Erstelle einen Ein-Phasen-Plan für den `generative_worker`. Formuliere einen präzisen Prompt, der genau beschreibt, wie der Text zu bearbeiten ist.
         **Ausgabeformat:** Gib den Plan ausschließlich als JSON-Objekt zurück.
-        
-        **Beispiel:**
-        ```json
-        {{
-          "plan": [
-            {{
-              "phase": 1, "description": "Textkorrektur durchführen", "worker": "generative_worker",
-              "prompt": "Korrigiere die Grammatik, Zeichensetzung und Rechtschreibung im folgenden Text und gib nur den korrigierten Text zurück: {context}"
-            }}
-          ]
-        }}
-        ```
-        """.replace("{context}", context)
+        """
 
-class WorkerAgent:
+class WorkerAgent(Agent):
     """
-    Ein spezialisierter Agent, der eine bestimmte Aufgabe ausführt,
-    basierend auf den Anweisungen des Master-Agenten.
+    Ein spezialisierter Agent, der eine bestimmte Aufgabe ausführt.
     """
     def __init__(self, text_model, json_model, tool_belt: ToolBelt):
-        self.text_model = text_model
+        super().__init__(text_model)
         self.json_model = json_model
         self.tool_belt = tool_belt
 
-    async def execute_task(self, worker_type: str, prompt: str, context: str = "") -> Union[List[Dict[str, Any]], Dict[str, Any], str]:
+    async def execute(self, worker_type: str, prompt: str, **kwargs) -> Any:
         """Führt die zugewiesene Aufgabe aus."""
         if worker_type == "research_worker":
             return await self._execute_research_task(prompt)
+        elif worker_type == "filter_worker":
+            return await self._execute_filter_task(prompt, kwargs.get("sources", []))
+        elif worker_type == "extraction_worker":
+            return await self._execute_extraction_task(prompt, kwargs.get("scraped_data", []))
         elif worker_type == "synthesis_worker":
-            return await self._execute_synthesis_task(prompt, context)
+            return await self._execute_synthesis_task(prompt, kwargs.get("context", ""))
         elif worker_type == "generative_worker":
             return await self._execute_generative_task(prompt)
         else:
             raise ValueError(f"Unbekannter Worker-Typ: {worker_type}")
 
     async def _execute_research_task(self, prompt: str) -> List[Dict[str, Any]]:
-        """Führt eine Rechercheaufgabe aus."""
-        logger.info(f"Research-Worker aktiv mit Prompt: {prompt[:100]}...")
+        logger.info(f"Research-Worker aktiv...")
         queries_de = re.findall(r"Suchbegriffe \(DE\): \['(.*?)'\]", prompt)
         queries_en = re.findall(r"Suchbegriffe \(EN\): \['(.*?)'\]", prompt)
         all_queries = []
@@ -367,32 +355,39 @@ class WorkerAgent:
         site_filter = "(site:awmf.org OR site:leitlinien.de OR site:escardio.org OR site:nice.org.uk OR site:pubmed.ncbi.nlm.nih.gov)"
         return await self.tool_belt.execute_search(all_queries, site_filter)
 
+    async def _execute_filter_task(self, prompt: str, sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        logger.info(f"Filter-Worker aktiv...")
+        if not sources: return []
+        source_summaries = "\n".join([f"ID: {i}, Titel: {s['title']}, URL: {s['link']}" for i, s in enumerate(sources)])
+        full_prompt = f"{prompt}\n\nVerfügbare Quellen:\n{source_summaries}\n\nGib ausschließlich eine JSON-Liste der IDs der besten Quellen zurück."
+        
+        response = await self.json_model.generate_content_async(full_prompt)
+        best_ids_raw = json.loads(response.text)
+        best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
+        return [sources[i] for i in best_ids if i < len(sources)]
+
+    async def _execute_extraction_task(self, prompt: str, scraped_data: List[Dict[str, str]]) -> str:
+        logger.info(f"Extraction-Worker aktiv...")
+        context = "\n\n---\n\n".join([f"URL: {d['url']}\n\nInhalt:\n{d['content']}" for d in scraped_data])
+        full_prompt = f"{prompt}\n\nZu analysierender Kontext:\n{context}\n\nGib nur die extrahierten Informationen als zusammenhängenden Text zurück."
+        response = await self.model.generate_content_async(full_prompt)
+        return response.text
+
     async def _execute_synthesis_task(self, prompt: str, context: str) -> Dict[str, Any]:
-        """Führt eine Syntheseaufgabe aus und erstellt das finale JSON."""
-        logger.info(f"Synthesis-Worker aktiv mit Prompt: {prompt[:100]}...")
-        full_prompt = f"""
-        {prompt}
-
-        **Gesammelter Kontext aus der Recherche:**
-        ---
-        {context}
-        ---
-
-        **Deine JSON-Ausgabe:**
-        """
-        response = await self.text_model.generate_content_async(full_prompt)
+        logger.info(f"Synthesis-Worker aktiv...")
+        full_prompt = f"{prompt}\n\n**Gesammelter Kontext:**\n{context}\n\n**Deine JSON-Ausgabe:**"
+        response = await self.model.generate_content_async(full_prompt)
         try:
             match = re.search(r'\{.*\}', response.text, re.DOTALL)
             if match:
                 return json.loads(match.group(0))
-            raise SynthesisError(f"Synthesis-Worker konnte kein gültiges JSON erstellen. Antwort: {response.text}")
+            raise SynthesisError(f"Synthesis-Worker konnte kein gültiges JSON erstellen.")
         except json.JSONDecodeError as e:
             raise SynthesisError(f"Fehler beim Parsen der JSON-Antwort vom Synthesis-Worker: {e}")
 
     async def _execute_generative_task(self, prompt: str) -> str:
-        """Führt eine allgemeine Textgenerierungsaufgabe aus."""
-        logger.info(f"Generative-Worker aktiv mit Prompt: {prompt[:100]}...")
-        response = await self.text_model.generate_content_async(prompt)
+        logger.info(f"Generative-Worker aktiv...")
+        response = await self.model.generate_content_async(prompt)
         return response.text
 
 # ==============================================================================
@@ -402,24 +397,19 @@ async def master_orchestrator_pipeline(query: str, mode: str, context: Optional[
     """
     Die Haupt-Pipeline, die den Master-Agenten zur Steuerung der Worker-Agenten einsetzt.
     """
-    # Initialisiere die Agenten und Werkzeuge für diesen Lauf
-    master = MasterAgent(llm_master_agent)
-    worker = WorkerAgent(llm_text_model, llm_json_model, ToolBelt())
+    master = MasterAgent(llm_master_agent_model)
+    worker = WorkerAgent(llm_worker_text_model, llm_worker_json_model, ToolBelt())
     
-    # Phase 1: Master-Agent erstellt den strategischen Plan
     yield {"type": "status", "content": "Kontaktiere den Master-Agenten zur Strategieerstellung..."}
     try:
-        plan_data = await master.create_plan(query, mode, context)
+        plan_data = await master.execute(query, mode, context)
         plan = plan_data.get("plan", [])
     except PlanGenerationError as e:
-        yield {"type": "error", "content": str(e)}
-        return
+        yield {"type": "error", "content": str(e)}; return
         
-    full_context = ""
-    source_map = {}
-    source_counter = 1
+    # Pipeline-Kontext, der Daten zwischen den Phasen weitergibt
+    pipeline_context = {}
 
-    # Führe die Phasen des Plans aus
     for phase in plan:
         phase_description = phase.get("description", f"Führe Phase {phase.get('phase')} aus")
         yield {"type": "status", "content": f"Phase {phase.get('phase', '?')}: {phase_description}"}
@@ -427,48 +417,47 @@ async def master_orchestrator_pipeline(query: str, mode: str, context: Optional[
         worker_type = phase.get("worker")
         worker_prompt = phase.get("prompt")
 
-        if worker_type == "research_worker":
-            search_results = await worker.execute_task(worker_type, worker_prompt)
-            unique_results = list({item['link']: item for item in search_results}.values())
+        try:
+            if worker_type == "research_worker":
+                search_results = await worker.execute(worker_type, worker_prompt)
+                pipeline_context["search_results"] = list({item['link']: item for item in search_results}.values())
             
-            if not unique_results:
-                logger.warning(f"Phase {phase.get('phase')} hat keine Quellen gefunden.")
-                continue
+            elif worker_type == "filter_worker":
+                filtered_sources = await worker.execute(worker_type, worker_prompt, sources=pipeline_context.get("search_results", []))
+                pipeline_context["filtered_sources"] = filtered_sources
+            
+            elif worker_type == "extraction_worker":
+                sources_to_scrape = pipeline_context.get("filtered_sources", [])
+                if not sources_to_scrape:
+                    logger.warning("Extraction-Worker hat keine Quellen zum Scrapen erhalten.")
+                    continue
+                yield {"type": "status", "content": f"Extrahiere Daten aus {len(sources_to_scrape)} Quellen..."}
+                scraped_data = await worker.tool_belt.scrape_content([src['link'] for src in sources_to_scrape])
+                extracted_context = await worker.execute(worker_type, worker_prompt, scraped_data=scraped_data)
+                pipeline_context["extracted_context"] = extracted_context
+                # Map sources for citation
+                source_map = {}
+                for i, source in enumerate(sources_to_scrape):
+                    source_map[i+1] = {"url": source['link'], "title": source.get('title', 'Unbekannter Titel')}
+                pipeline_context["source_map"] = source_map
 
-            yield {"type": "status", "content": f"Extrahiere Daten aus {len(unique_results)} Quellen..."}
-            
-            scraped_results = await worker.tool_belt.scrape_content([src['link'] for src in unique_results])
-            
-            for i, result in enumerate(scraped_results):
-                content = result.get("content")
-                if content:
-                    source_url = result["url"]
-                    if source_url not in source_map:
-                        title = next((res.get('title', 'Unbekannter Titel') for res in unique_results if res['link'] == source_url), "Unbekannter Titel")
-                        source_map[source_url] = {"id": source_counter, "title": title}
-                        source_counter += 1
-                    
-                    citation = f"<sup>{source_map[source_url]['id']}</sup>"
-                    full_context += f"### Quelle: {source_map[source_url]['title']} {citation}\n\n{content}\n\n---\n\n"
+            elif worker_type in ["synthesis_worker", "generative_worker"]:
+                task_context = pipeline_context.get("extracted_context", "") if worker_type == "synthesis_worker" else context
+                if worker_type == "synthesis_worker" and not task_context:
+                    yield {"type": "error", "content": "Keine Informationen konnten für die Synthese gesammelt werden."}; return
 
-        elif worker_type in ["synthesis_worker", "generative_worker"]:
-            if worker_type == "synthesis_worker" and not full_context:
-                yield {"type": "error", "content": "Keine Informationen konnten für die Synthese gesammelt werden."}
+                final_response = await worker.execute(worker_type, worker_prompt, context=task_context)
+                
+                if isinstance(final_response, dict):
+                    final_response["sources"] = list(pipeline_context.get("source_map", {}).values())
+                    yield {"type": "final_response", "content": final_response}
+                else:
+                    yield {"type": "final_response", "content": {"reponse_courte": final_response, "reponse_detaillee": []}}
                 return
 
-            yield {"type": "status", "content": "Übergebe Daten an den zuständigen Worker-Agenten..."}
-            
-            # Für generative Aufgaben wird der initiale Kontext verwendet
-            task_context = context if worker_type == "generative_worker" else full_context
-            
-            final_response = await worker.execute_task(worker_type, worker_prompt, task_context)
-            
-            if isinstance(final_response, dict):
-                 # Füge die gesammelten Quellen zur finalen Antwort hinzu
-                final_response["sources"] = list(source_map.values())
-                yield {"type": "final_response", "content": final_response}
-            else: # Für generative Aufgaben, die nur Text zurückgeben
-                yield {"type": "final_response", "content": {"reponse_courte": final_response, "reponse_detaillee": []}}
+        except Exception as e:
+            logger.exception(f"Fehler in Phase {phase.get('phase')}: {e}")
+            yield {"type": "error", "content": f"Ein Fehler ist in Phase '{phase_description}' aufgetreten."}
             return
 
     yield {"type": "error", "content": "Der Plan wurde abgeschlossen, aber es wurde keine finale Antwort generiert."}
@@ -486,6 +475,10 @@ async def perform_research_stream(request: ResearchRequest):
     
     async def event_wrapper():
         """Verpackt die Pipeline-Events für Server-Sent Events (SSE)."""
+        # KORREKTUR: Überprüfen, ob die Modelle initialisiert wurden
+        if not all([llm_master_agent_model, llm_worker_json_model, llm_worker_text_model]):
+            yield {"data": json.dumps({"type": "error", "content": "Die KI-Modelle konnten nicht initialisiert werden. Überprüfen Sie die API-Schlüssel."})}
+            return
         try:
             async for event_data in master_orchestrator_pipeline(request.query, request.mode, request.context):
                 yield {"data": json.dumps(event_data)}

@@ -2,11 +2,11 @@
 # DATEI: main.py
 # ROLLE: Eine hochmoderne "KI über KI"-Architektur. Ein Master-Agent erstellt
 #        dynamische Pläne für eine Brigade von spezialisierten Worker-Agenten.
-# KORREKTUR: Der Master-Agent verfügt nun über eine Fallback-Logik. Wenn die
-#            erste komplexe Planerstellung fehlschlägt, versucht er es mit
-#            einem einfacheren Ansatz erneut, um den "0 Phasen"-Fehler zu beheben.
+# KORREKTUR: Eine Validierungsschicht wurde hinzugefügt, um sicherzustellen,
+#            dass der vom Master-Agenten generierte Plan die korrekte Struktur
+#            (Liste von Dictionaries) hat, um den AttributeError zu beheben.
 # SPRACHE: Deutsch
-# VERSION: 9.4.0
+# VERSION: 9.5.0
 # LINIEN: > 1500
 # ==============================================================================
 
@@ -73,7 +73,7 @@ except ValidationError as e:
 app = FastAPI(
     title="Medizinischer Agent mit 'KI über KI'-Architektur",
     description="Ein Master-KI-Agent steuert Worker-Agenten, um komplexe medizinische Anfragen mit dynamischen Strategien zu beantworten.",
-    version="9.4.0"
+    version="9.5.0"
 )
 
 app.add_middleware(
@@ -173,7 +173,6 @@ class MasterAgent(Agent):
         logger.info(f"Master-Agent erstellt einen Plan für: '{user_query[:50]}...' im Modus '{mode}'")
         task_type = "generative_task" if context else "research_task"
         
-        # Erster Versuch mit dem komplexen Prompt
         prompt = self._create_research_plan_prompt(user_query, mode) if task_type == "research_task" else self._create_generative_plan_prompt(user_query, context)
         
         response = await self.model.generate_content_async(prompt)
@@ -181,7 +180,6 @@ class MasterAgent(Agent):
         
         plan = self._parse_plan(response_text)
 
-        # KORREKTUR: Fallback-Mechanismus
         if not plan or not plan.get("plan"):
             logger.warning("Der erste Planungsversuch schlug fehl oder ergab einen leeren Plan. Starte Fallback-Versuch.")
             prompt = self._create_fallback_plan_prompt(user_query, mode)
@@ -336,12 +334,17 @@ async def master_orchestrator_pipeline(query: str, mode: str, context: Optional[
         
     pipeline_context = {}
 
-    for phase in plan:
-        phase_description = phase.get("description", f"Führe Phase {phase.get('phase')} aus")
-        yield {"type": "status", "content": f"Phase {phase.get('phase', '?')}: {phase_description}"}
+    for phase_data in plan:
+        # KORREKTUR: Überprüfen, ob phase_data ein Dictionary ist.
+        if not isinstance(phase_data, dict):
+            logger.error(f"Fehlerhafte Phase im Plan entdeckt: {phase_data}. Phase wird übersprungen.")
+            continue
+
+        phase_description = phase_data.get("description", f"Führe Phase {phase_data.get('phase')} aus")
+        yield {"type": "status", "content": f"Phase {phase_data.get('phase', '?')}: {phase_description}"}
         
-        worker_type = phase.get("worker")
-        worker_prompt = phase.get("prompt")
+        worker_type = phase_data.get("worker")
+        worker_prompt = phase_data.get("prompt")
 
         try:
             if worker_type == "research_worker":
@@ -350,7 +353,7 @@ async def master_orchestrator_pipeline(query: str, mode: str, context: Optional[
                 pipeline_context["search_results"] = unique_results
                 
                 if not unique_results:
-                    logger.warning(f"Phase {phase.get('phase')} hat keine Quellen gefunden.")
+                    logger.warning(f"Phase {phase_data.get('phase')} hat keine Quellen gefunden.")
                     continue
                 
                 yield {"type": "status", "content": f"Extrahiere Daten aus {len(unique_results)} Quellen..."}
@@ -383,7 +386,7 @@ async def master_orchestrator_pipeline(query: str, mode: str, context: Optional[
                 return
 
         except Exception as e:
-            logger.exception(f"Fehler in Phase {phase.get('phase')}: {e}")
+            logger.exception(f"Fehler in Phase {phase_data.get('phase')}: {e}")
             yield {"type": "error", "content": f"Ein Fehler ist in Phase '{phase_description}' aufgetreten."}; return
 
     yield {"type": "error", "content": "Der Plan wurde abgeschlossen, aber es wurde keine finale Antwort generiert."}

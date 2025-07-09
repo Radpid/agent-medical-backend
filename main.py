@@ -78,7 +78,7 @@ try:
         generation_config=json_generation_config
     )
     # Standardmodell für Nicht-JSON-Aufgaben
-    llm_text_model = genai.GenerativeModel('gemini-1.5-flash')
+    llm_text_model = genai.GenerativeModel('gemini-2.5-flash')
     logger.info("Google Gemini-Modelle initialisiert.")
 except Exception as e:
     logger.error(f"Fehler bei der Konfiguration der Gemini-API: {e}")

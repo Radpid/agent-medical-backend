@@ -3,8 +3,10 @@
 # ROLLE: KI-Orchestrator, der einen dynamischen Rechercheplan erstellt und
 #        als Endergebnis ein einziges, strukturiertes JSON-Objekt zur
 #        kreativen Darstellung im Frontend liefert.
+# KORREKTUR: Der Prompt für die Planerstellung wurde mit einem strikten Schema
+#            versehen, um den "KeyError: 'description'" zu beheben.
 # SPRACHE: Deutsch
-# VERSION: 6.0.0
+# VERSION: 6.1.0
 # ==============================================================================
 
 import os
@@ -57,7 +59,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Dynamischer Medizinischer Forschungsagent (JSON-API)",
     description="Ein KI-Agent, der maßgeschneiderte Recherchestrategien entwickelt und die Ergebnisse als strukturiertes JSON für eine reichhaltige Frontend-Darstellung liefert.",
-    version="6.0.0"
+    version="6.1.0"
 )
 
 app.add_middleware(
@@ -135,17 +137,32 @@ async def scrape_tool(url: str) -> str:
 # ==============================================================================
 
 async def generate_dynamic_search_plan(user_query: str, mode: str) -> List[Dict[str, str]]:
+    mode_instruction = (
+        "Erstelle einen umfassenden, mehrstufigen Rechercheplan mit 4-6 Schritten, um das Thema tiefgehend zu untersuchen."
+        if mode == "deep"
+        else "Erstelle einen kurzen und effizienten Rechercheplan mit 2-3 Schritten, um die Frage direkt zu beantworten."
+    )
     prompt = f"""
     Du bist ein medizinischer Recherche-Stratege. Erstelle einen optimalen Rechercheplan für die Anfrage eines Arztes.
     Anfrage: "{user_query}"
-    Modus: "{mode}" (deep = umfassend, 4-6 Schritte; rapid = effizient, 2-3 Schritte)
+    Anweisungen: {mode_instruction}
     
     Definiere für jeden Schritt ein Werkzeug (`guideline_search`, `academic_search`, `web_search`) und zweisprachige Suchanfragen (`query_de`, `query_en`).
-    Gib das Ergebnis ausschließlich als JSON-Array von Objekten zurück.
+    Gib das Ergebnis ausschließlich als JSON-Array von Objekten zurück, das dem folgenden Schema strikt folgt:
+    ```json
+    [
+      {{
+        "step": 1,
+        "description": "Eine kurze Beschreibung des Recherche-Schritts.",
+        "tool": "werkzeug_name",
+        "query_de": "deutsche_suchanfrage",
+        "query_en": "englische_suchanfrage"
+      }}
+    ]
+    ```
     """
     try:
         response = await llm_json_model.generate_content_async(prompt)
-        # Da wir JSON-Ausgabe erwarten, können wir direkt parsen
         return json.loads(response.text)
     except Exception as e:
         logger.error(f"Fehler bei der Planerstellung: {e}. Fallback-Plan wird verwendet.")
@@ -162,7 +179,10 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
     """
     try:
         response = await llm_json_model.generate_content_async(prompt)
-        best_ids = json.loads(response.text)
+        best_ids_raw = json.loads(response.text)
+        best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
+        if not best_ids:
+            return sources[:num_sources_to_select]
         return [sources[i] for i in best_ids if i < len(sources)]
     except Exception:
         return sources[:num_sources_to_select]
@@ -218,14 +238,13 @@ async def synthesize_json_response(user_query: str, research_data: List[Dict[str
         {{
           "type": "diagramme_mermaid",
           "titre": "Diagnostischer Algorithmus",
-          "contenu": "graph TD\\nA[Verdacht] --> B{{D-Dimer}};\\nB -->|Positiv| C[CT-Angio];\\nB -->|Negativ| D[LAE unwahrscheinlich];"
+          "contenu": "graph TD\\nA[\\"Verdacht\\"] --> B{{\\"D-Dimer\\"}};\\nB -->|Positiv| C[\\"CT-Angio\\"];\\nB -->|Negativ| D[\\"LAE unwahrscheinlich\\"];"
         }}
       ]
     }}
     ```
     """
     try:
-        # Hier verwenden wir das Textmodell, da der Prompt komplex ist und die JSON-Struktur enthält
         response = await llm_text_model.generate_content_async(prompt)
         match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if match:

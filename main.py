@@ -4,10 +4,10 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Die Verarbeitung der Quellen-IDs wurde robust gemacht, um den
-#            TypeError zu beheben.
+# KORREKTUR: Die Pipeline wurde robuster gemacht, indem sie versucht, mehrere
+#            Quellen pro Schritt zu scrapen, um die Fehleranfälligkeit zu verringern.
 # SPRACHE: Deutsch
-# VERSION: 7.3.0
+# VERSION: 7.4.0
 # ==============================================================================
 
 import os
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.3.0"
+    version="7.4.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -137,7 +137,7 @@ async def generate_dynamic_search_plan(user_query: str, mode: str) -> List[Dict[
 
 async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]], mode: str) -> List[Dict[str, Any]]:
     if not sources: return []
-    num_sources_to_select = 5 if mode == 'deep' else 3
+    num_sources_to_select = 3 if mode == 'deep' else 2 # Wähle weniger, aber relevantere Quellen pro Schritt
     source_summaries = "\n".join([f"ID: {i}, Titel: {s['title']}, URL: {s['link']}" for i, s in enumerate(sources)])
     prompt = f"""
     Bewerte die Relevanz der folgenden Quellen für die Anfrage: "{user_query}".
@@ -147,7 +147,6 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
     response = await llm_json_model.generate_content_async(prompt)
     best_ids_raw = json.loads(response.text)
     
-    # KORREKTUR: Sicherstellen, dass alle IDs Integer sind, bevor sie verglichen werden.
     best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
     
     return [sources[i] for i in best_ids if i < len(sources)]
@@ -228,14 +227,23 @@ async def base_pipeline(query: str, mode: str) -> AsyncGenerator[Dict[str, Any],
         all_step_results = [item for sublist in results for item in sublist]
         
         if all_step_results:
-            # Anstatt nur die erste Quelle zu nehmen, filtern wir die besten
-            best_sources_for_step = await filter_and_rank_sources(step['description'], all_step_results, 'rapid') # 'rapid' mode to get 1-2 best sources
+            best_sources_for_step = await filter_and_rank_sources(step['description'], all_step_results, mode)
+            
+            # KORREKTUR: Versuche, mehrere Quellen pro Schritt zu scrapen, um die Robustheit zu erhöhen.
             if best_sources_for_step:
-                top_source_url = best_sources_for_step[0]['link']
-                content = await scrape_tool(top_source_url)
-                if content:
+                scrape_tasks = [scrape_tool(source['link']) for source in best_sources_for_step]
+                scraped_contents = await asyncio.gather(*scrape_tasks)
+                
+                combined_content = ""
+                scraped_urls = []
+                for i, content in enumerate(scraped_contents):
+                    if content:
+                        combined_content += content + "\n\n"
+                        scraped_urls.append(best_sources_for_step[i]['link'])
+                
+                if combined_content:
                     node_name = step['description']
-                    knowledge_graph[node_name] = {"content": content, "sources": [top_source_url]}
+                    knowledge_graph[node_name] = {"content": combined_content, "sources": scraped_urls}
 
     if not knowledge_graph:
         yield {"type": "error", "content": "Keine Informationen gefunden oder Inhalte konnten nicht extrahiert werden."}

@@ -74,7 +74,7 @@ app.add_middleware(
 try:
     json_generation_config = genai.GenerationConfig(response_mime_type="application/json")
     llm_json_model = genai.GenerativeModel(
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
         generation_config=json_generation_config
     )
     # Standardmodell für Nicht-JSON-Aufgaben

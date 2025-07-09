@@ -4,11 +4,10 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Die Quellenfilterung wurde robuster gemacht. Wenn die KI keine
-#            Quellen auswählt, wird ein Fallback auf die ersten Suchergebnisse
-#            verwendet, um den Prozess fortzusetzen.
+# KORREKTUR: Der Prompt für die Diagrammerstellung wurde verbessert, um
+#            syntaktisch korrekten Mermaid-Code zu gewährleisten.
 # SPRACHE: Deutsch
-# VERSION: 7.6.0
+# VERSION: 7.7.0
 # ==============================================================================
 
 import os
@@ -54,7 +53,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.6.0"
+    version="7.7.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -151,7 +150,6 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
         
         best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
         
-        # KORREKTUR: Fallback-Logik, wenn die KI-Filterung fehlschlägt.
         if not best_ids:
             logger.warning("Die KI-Filterung hat keine relevanten Quellen ausgewählt. Fallback: Die ersten Quellen werden verwendet.")
             return sources[:num_sources_to_select]
@@ -170,6 +168,8 @@ async def creative_synthesis_agent(user_query: str, context_str: str, source_map
     {context_str}
     **Deine Aufgabe:**
     Fülle das folgende JSON-Schema aus. Sei kreativ bei der Wahl der Inhaltsblöcke. Zitiere Informationen mit hochgestellten Zahlen, z.B. `...Text...<sup>1</sup>`.
+    **WICHTIG für Diagramme:** Text in Knoten MUSS in Anführungszeichen gesetzt werden, wenn er Leerzeichen enthält (z.B. `A["Verdacht auf LAE"] --> B["CT-Angio"]`).
+
     ```json
     {{
       "reponse_courte": "Eine prägnante Zusammenfassung der Antwort in 1-2 Sätzen.",
@@ -177,7 +177,7 @@ async def creative_synthesis_agent(user_query: str, context_str: str, source_map
       "reponse_detaillee": [
         {{"type": "paragraphe", "titre": "Titel", "contenu": "Absatz mit Zitaten<sup>1</sup>."}},
         {{"type": "tableau", "titre": "Tabelle", "entetes": ["H1", "H2"], "lignes": [["Z1", "Z2"]]}},
-        {{"type": "diagramme_mermaid", "titre": "Diagramm", "contenu": "graph TD\\nA --> B;"}}
+        {{"type": "diagramme_mermaid", "titre": "Diagramm", "contenu": "graph TD\\nA[\\"Knoten mit Leerzeichen\\"] --> B[\\"Anderer Knoten\\"];"}}
       ]
     }}
     ```

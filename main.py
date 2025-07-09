@@ -2,10 +2,11 @@
 # DATEI: main.py
 # ROLLE: Eine hochmoderne "KI über KI"-Architektur. Ein Master-Agent erstellt
 #        dynamische Pläne für eine Brigade von spezialisierten Worker-Agenten.
-#        Diese Version führt einen Zwischen-Synthese-Agenten ein, um die
-#        Stabilität zu erhöhen und API-Limit-Fehler zu vermeiden.
+# KORREKTUR: Der Master-Agent verfügt nun über eine Fallback-Logik. Wenn die
+#            erste komplexe Planerstellung fehlschlägt, versucht er es mit
+#            einem einfacheren Ansatz erneut, um den "0 Phasen"-Fehler zu beheben.
 # SPRACHE: Deutsch
-# VERSION: 9.3.0
+# VERSION: 9.4.0
 # LINIEN: > 1500
 # ==============================================================================
 
@@ -52,8 +53,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(..., description="API-Schlüssel für Google Gemini.")
     SERPER_API_KEY: str = Field(..., description="API-Schlüssel für die Serper.dev Such-API.")
     FIRECRAWL_API_KEY: str = Field(..., description="API-Schlüssel für die Firecrawl.dev Scraping-API.")
-    MASTER_AGENT_MODEL: str = Field("gemini-2.5-flash", description="Leistungsstarkes Modell für den Master-Agenten.")
-    WORKER_AGENT_MODEL: str = Field("gemini-2.5-flash", description="Schnelles und effizientes Modell für Worker-Agenten.")
+    MASTER_AGENT_MODEL: str = Field("gemini-1.5-pro", description="Leistungsstarkes Modell für den Master-Agenten.")
+    WORKER_AGENT_MODEL: str = Field("gemini-1.5-flash", description="Schnelles und effizientes Modell für Worker-Agenten.")
 
     class Config:
         env_file = ".env"
@@ -72,7 +73,7 @@ except ValidationError as e:
 app = FastAPI(
     title="Medizinischer Agent mit 'KI über KI'-Architektur",
     description="Ein Master-KI-Agent steuert Worker-Agenten, um komplexe medizinische Anfragen mit dynamischen Strategien zu beantworten.",
-    version="9.3.0"
+    version="9.4.0"
 )
 
 app.add_middleware(
@@ -171,21 +172,39 @@ class MasterAgent(Agent):
     async def execute(self, user_query: str, mode: str, context: Optional[str]) -> Dict[str, Any]:
         logger.info(f"Master-Agent erstellt einen Plan für: '{user_query[:50]}...' im Modus '{mode}'")
         task_type = "generative_task" if context else "research_task"
+        
+        # Erster Versuch mit dem komplexen Prompt
         prompt = self._create_research_plan_prompt(user_query, mode) if task_type == "research_task" else self._create_generative_plan_prompt(user_query, context)
         
         response = await self.model.generate_content_async(prompt)
         response_text = safe_get_response_text(response)
+        
+        plan = self._parse_plan(response_text)
+
+        # KORREKTUR: Fallback-Mechanismus
+        if not plan or not plan.get("plan"):
+            logger.warning("Der erste Planungsversuch schlug fehl oder ergab einen leeren Plan. Starte Fallback-Versuch.")
+            prompt = self._create_fallback_plan_prompt(user_query, mode)
+            response = await self.model.generate_content_async(prompt)
+            response_text = safe_get_response_text(response)
+            plan = self._parse_plan(response_text)
+            if not plan or not plan.get("plan"):
+                 raise PlanGenerationError("Selbst der Fallback-Planungsversuch schlug fehl.")
+
+        logger.info(f"Master-Agent hat erfolgreich einen Plan mit {len(plan.get('plan', []))} Phasen erstellt.")
+        return plan
+
+    def _parse_plan(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Versucht, ein JSON-Objekt aus dem Antworttext zu parsen."""
         if not response_text:
-            raise PlanGenerationError("Master-Agent hat eine leere Antwort zurückgegeben.")
+            return None
         try:
             match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if match:
-                plan = json.loads(match.group(0))
-                logger.info(f"Master-Agent hat erfolgreich einen Plan mit {len(plan.get('plan', []))} Phasen erstellt.")
-                return plan
-            raise PlanGenerationError(f"Master-Agent konnte keinen gültigen JSON-Plan erstellen.")
-        except (json.JSONDecodeError, ValueError) as e:
-            raise PlanGenerationError(f"Fehler beim Parsen des Plans vom Master-Agenten: {e}")
+                return json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return None
+        return None
 
     def _create_research_plan_prompt(self, user_query: str, mode: str) -> str:
         mode_instruction = "Erstelle einen umfassenden, mehrstufigen Plan (3-5 Phasen)." if mode == "deep" else "Erstelle einen effizienten 2-Phasen-Plan."
@@ -199,6 +218,32 @@ class MasterAgent(Agent):
         2.  **Phase 2 (summarization_worker):** Weise ihn an, die gefundenen Texte zu prägnanten, relevanten Zusammenfassungen zu verarbeiten.
         3.  **Phase 3 (synthesis_worker):** Gib Anweisungen zur Erstellung der finalen, kreativen JSON-Antwort basierend auf den Zusammenfassungen.
         **Ausgabeformat:** Gib den Plan ausschließlich als JSON-Objekt zurück.
+        """
+
+    def _create_fallback_plan_prompt(self, user_query: str, mode: str) -> str:
+        """Erstellt einen einfacheren, robusteren Plan, wenn der erste Versuch fehlschlägt."""
+        logger.info("Erstelle einen einfachen Fallback-Plan.")
+        return f"""
+        Erstelle einen einfachen, aber robusten 2-Phasen-Rechercheplan für die Anfrage "{user_query}".
+        **Ausgabeformat:** Gib den Plan ausschließlich als JSON-Objekt zurück.
+        ```json
+        {{
+          "plan": [
+            {{
+              "phase": 1,
+              "description": "Allgemeine und Leitlinien-Recherche",
+              "worker": "research_worker",
+              "prompt": "Führe eine breite Suche zum Thema '{user_query}' durch. Suchbegriffe (DE): ['{user_query} Übersicht', '{user_query} Leitlinie']. Suchbegriffe (EN): ['{user_query} overview', '{user_query} guideline']."
+            }},
+            {{
+              "phase": 2,
+              "description": "Zusammenfassung und JSON-Erstellung",
+              "worker": "synthesis_worker",
+              "prompt": "Analysiere den gesamten gesammelten Kontext zur Anfrage '{user_query}' und erstelle eine detaillierte, strukturierte JSON-Antwort."
+            }}
+          ]
+        }}
+        ```
         """
 
     def _create_generative_plan_prompt(self, user_query: str, context: str) -> str:
@@ -312,7 +357,6 @@ async def master_orchestrator_pipeline(query: str, mode: str, context: Optional[
                 scraped_data = await worker.tool_belt.scrape_content([src['link'] for src in unique_results])
                 pipeline_context["scraped_data"] = scraped_data
                 
-                # Map sources for citation
                 source_map = {}
                 for i, source in enumerate(unique_results):
                     source_map[i+1] = {"url": source['link'], "title": source.get('title', 'Unbekannter Titel')}

@@ -4,11 +4,11 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Die Pipeline wurde grundlegend überarbeitet, um die Stabilität zu
-#            erhöhen. Alle Quellen werden zuerst gesammelt, dann global gefiltert
-#            und erst danach gescraped.
+# KORREKTUR: Die Quellenfilterung wurde robuster gemacht. Wenn die KI keine
+#            Quellen auswählt, wird ein Fallback auf die ersten Suchergebnisse
+#            verwendet, um den Prozess fortzusetzen.
 # SPRACHE: Deutsch
-# VERSION: 7.5.0
+# VERSION: 7.6.0
 # ==============================================================================
 
 import os
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.5.0"
+    version="7.6.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -145,12 +145,22 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
     Priorisiere offizielle Leitlinien und systematische Reviews.
     Gib ausschließlich eine JSON-Liste der IDs der {num_sources_to_select} besten Quellen zurück.
     """
-    response = await llm_json_model.generate_content_async(prompt)
-    best_ids_raw = json.loads(response.text)
-    
-    best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
-    
-    return [sources[i] for i in best_ids if i < len(sources)]
+    try:
+        response = await llm_json_model.generate_content_async(prompt)
+        best_ids_raw = json.loads(response.text)
+        
+        best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
+        
+        # KORREKTUR: Fallback-Logik, wenn die KI-Filterung fehlschlägt.
+        if not best_ids:
+            logger.warning("Die KI-Filterung hat keine relevanten Quellen ausgewählt. Fallback: Die ersten Quellen werden verwendet.")
+            return sources[:num_sources_to_select]
+        
+        return [sources[i] for i in best_ids if i < len(sources)]
+    except Exception as e:
+        logger.error(f"Fehler bei der KI-Filterung: {e}. Fallback: Die ersten Quellen werden verwendet.")
+        return sources[:num_sources_to_select]
+
 
 async def creative_synthesis_agent(user_query: str, context_str: str, source_map: Dict[str, int]) -> Dict[str, Any]:
     prompt = f"""

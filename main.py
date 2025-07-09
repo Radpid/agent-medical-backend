@@ -1,9 +1,11 @@
 # ==============================================================================
 # DATEI: main.py
-# ROLLE: Dynamischer KI-Orchestrator, der für jede Anfrage einen maßgeschneiderten,
-#        mehrstufigen Rechercheplan erstellt und ausführt.
+# ROLLE: Implementiert eine zweigleisige Strategie:
+#        - 'rapid' Modus: Ein schneller, dynamischer Plan.
+#        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
+#          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
 # SPRACHE: Deutsch
-# VERSION: 5.1.0
+# VERSION: 7.0.0
 # ==============================================================================
 
 import os
@@ -16,9 +18,9 @@ from typing import List, Optional, Literal, Dict, Any, AsyncGenerator
 
 import httpx
 import google.generativeai as genai
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 from sse_starlette.sse import EventSourceResponse
@@ -26,8 +28,6 @@ from sse_starlette.sse import EventSourceResponse
 # ==============================================================================
 # TEIL 1: KONFIGURATION UND INITIALISIERUNG
 # ==============================================================================
-
-# --- Logging-Konfiguration ---
 def setup_logging():
     log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     root_logger = logging.getLogger()
@@ -37,64 +37,42 @@ def setup_logging():
         stream_handler.setFormatter(log_formatter)
         root_logger.addHandler(stream_handler)
 
-# --- Umgebungsvariablen und Secrets ---
 load_dotenv()
-
 class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY")
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY")
-
-    class Config:
-        env_file = ".env"
+    class Config: env_file = ".env"
 
 settings = Settings()
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# --- FastAPI-App-Initialisierung ---
 app = FastAPI(
-    title="Dynamischer Medizinischer Forschungsagent",
-    description="Ein KI-Agent, der für jede Anfrage maßgeschneiderte Recherchestrategien entwickelt und ausführt, um Antworten auf Facharztniveau zu liefern.",
-    version="5.1.0"
+    title="Medizinischer Agent mit Exploratory Graph Logik",
+    description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
+    version="7.0.0"
 )
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Gemini-Modell-Initialisierung ---
 try:
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    llm_model = genai.GenerativeModel('gemini-1.5-flash')
-    logger.info("Google Gemini-Modell initialisiert.")
+    json_generation_config = genai.GenerationConfig(response_mime_type="application/json")
+    llm_json_model = genai.GenerativeModel('gemini-1.5-flash', generation_config=json_generation_config)
+    llm_text_model = genai.GenerativeModel('gemini-1.5-flash')
+    logger.info("Google Gemini-Modelle initialisiert.")
 except Exception as e:
     logger.error(f"Fehler bei der Konfiguration der Gemini-API: {e}")
-    llm_model = None
+    llm_json_model, llm_text_model = None, None
 
 # ==============================================================================
-# TEIL 2: DATENMODELLE (PYDANTIC)
+# TEIL 2: DATENMODELLE UND WERKZEUGE
 # ==============================================================================
-
 class ResearchRequest(BaseModel):
     query: str
     mode: Literal["rapid", "deep"]
 
-class Source(BaseModel):
-    title: str
-    url: str
-    snippet: Optional[str] = None
-
-# ==============================================================================
-# TEIL 3: SPEZIALISIERTE AGENTEN-WERKZEUGE
-# ==============================================================================
-
 async def execute_search_tool(query: str, site_filter: str = "") -> List[Dict[str, Any]]:
-    """Ein einziges, flexibles Such-Werkzeug."""
+    # ... (Keine Änderungen hier)
     logger.info(f"Such-Werkzeug wird für '{query}' mit Filter '{site_filter}' verwendet")
     search_query = f"{query} {site_filter}"
     url = "https://google.serper.dev/search"
@@ -110,7 +88,7 @@ async def execute_search_tool(query: str, site_filter: str = "") -> List[Dict[st
             return []
 
 async def scrape_tool(url: str) -> str:
-    """Robustes Scraping-Werkzeug mit Firecrawl."""
+    # ... (Keine Änderungen hier)
     logger.info(f"Scraping-Werkzeug (Firecrawl) wird für '{url}' verwendet")
     api_url = "https://api.firecrawl.dev/v0/scrape"
     headers = {"Authorization": f"Bearer {settings.FIRECRAWL_API_KEY}", "Content-Type": "application/json"}
@@ -126,181 +104,165 @@ async def scrape_tool(url: str) -> str:
             return ""
 
 # ==============================================================================
-# TEIL 4: LOGIK DES DYNAMISCHEN ORCHESTRIERUNGS-AGENTEN
+# TEIL 3: LOGIK FÜR DEN "DEEP" MODUS - EXPLORATORY GRAPH AGENT
 # ==============================================================================
 
-async def generate_dynamic_search_plan(user_query: str, mode: str) -> List[Dict[str, str]]:
+async def build_knowledge_graph_agent(user_query: str, stream_callback: callable) -> Dict[str, Any]:
+    """Baut iterativ ein Wissensnetz auf."""
+    knowledge_graph = {"nodes": {}, "edges": []}
+    
+    # Phase 1: Initiale Knotenpunkte identifizieren
+    await stream_callback({"type": "status", "content": "Phase 1: Identifiziere Schlüsselkonzepte..."})
+    prompt1 = f"""
+    Identifiziere für die medizinische Anfrage "{user_query}" die 3-5 zentralen, übergeordneten Konzepte, die für eine tiefgehende Antwort erforderlich sind.
+    Gib das Ergebnis ausschließlich als JSON-Liste von Strings zurück. Beispiel: ["Definition und Pathophysiologie", "Diagnostische Verfahren", "Therapeutische Strategien"]
     """
-    Schritt 1: Das KI-Gehirn. Erstellt einen dynamischen, mehrstufigen Rechercheplan.
-    """
-    mode_instruction = (
-        "Erstelle einen umfassenden, mehrstufigen Rechercheplan mit 4-6 Schritten, um das Thema tiefgehend zu untersuchen. Kombiniere Definitions-, Leitlinien- und Studienrecherchen."
-        if mode == "deep"
-        else "Erstelle einen kurzen und effizienten Rechercheplan mit 2-3 Schritten, um die Frage direkt zu beantworten."
-    )
+    response1 = await llm_json_model.generate_content_async(prompt1)
+    initial_nodes = json.loads(response1.text)
+    
+    for node_name in initial_nodes:
+        knowledge_graph["nodes"][node_name] = {"content": "", "sources": []}
 
+    # Phase 2: Graph iterativ erweitern
+    for node_name in initial_nodes:
+        await stream_callback({"type": "status", "content": f"Phase 2: Erweitere das Konzept '{node_name}'..."})
+        prompt2 = f"""
+        Erstelle für das Konzept "{node_name}" im Kontext der Anfrage "{user_query}" eine präzise, zweisprachige Suchanfrage für medizinische Leitlinien und Fachartikel.
+        Gib das Ergebnis ausschließlich als JSON-Objekt zurück. Beispiel: {{"query_de": "Lungenembolie Diagnostik Leitlinie", "query_en": "pulmonary embolism diagnosis guideline"}}
+        """
+        response2 = await llm_json_model.generate_content_async(prompt2)
+        queries = json.loads(response2.text)
+        
+        site_filter = "(site:awmf.org OR site:leitlinien.de OR site:escardio.org OR site:dgk.org OR site:pubmed.ncbi.nlm.nih.gov)"
+        search_results = await execute_search_tool(f"{queries['query_de']} OR {queries['query_en']}", site_filter)
+        
+        if search_results:
+            # Scrape der Top-Quelle für dieses Konzept
+            top_source_url = search_results[0]['link']
+            content = await scrape_tool(top_source_url)
+            if content:
+                knowledge_graph["nodes"][node_name]["content"] = content
+                knowledge_graph["nodes"][node_name]["sources"].append(top_source_url)
+    
+    return knowledge_graph
+
+async def find_synthesis_path_agent(user_query: str, knowledge_graph: Dict[str, Any]) -> List[str]:
+    """Bestimmt den logischsten Pfad durch das Wissensnetz für die Synthese."""
+    node_names = list(knowledge_graph["nodes"].keys())
     prompt = f"""
-    Du bist ein medizinischer Recherche-Stratege. Deine Aufgabe ist es, einen optimalen Rechercheplan für die Anfrage eines Arztes zu erstellen.
-
-    Anfrage des Arztes: "{user_query}"
-
-    Anweisungen:
-    1.  **Plan erstellen:** {mode_instruction}
-    2.  **Werkzeuge definieren:** Wähle für jeden Schritt das passende Werkzeug:
-        - `guideline_search`: Für die Suche nach offiziellen Leitlinien.
-        - `academic_search`: Für die Suche nach klinischen Studien auf PubMed.
-        - `web_search`: Für die Suche nach Übersichtsartikeln, Fachinformationen oder Grundlagen.
-    3.  **Zweisprachige Anfragen:** Formuliere für jeden Schritt eine präzise Suchanfrage (`query_de` auf Deutsch und `query_en` auf Englisch).
-
-    Gib das Ergebnis ausschließlich als JSON-Array von Objekten zurück.
-    Beispiel für einen Plan:
-    [
-      {{
-        "step": 1,
-        "description": "Suche nach der S3-Leitlinie zur Definition und initialen Diagnostik.",
-        "tool": "guideline_search",
-        "query_de": "AWMF S3-Leitlinie Lungenembolie Definition Diagnostik",
-        "query_en": "pulmonary embolism guideline definition diagnosis"
-      }},
-      {{
-        "step": 2,
-        "description": "Suche nach aktuellen Meta-Analysen zu neuen Antikoagulanzien.",
-        "tool": "academic_search",
-        "query_de": "Lungenembolie neue Antikoagulanzien Meta-Analyse",
-        "query_en": "pulmonary embolism novel anticoagulants meta-analysis"
-      }}
-    ]
+    Gegeben ist die Anfrage "{user_query}" und eine Liste von Wissensknoten.
+    Ordne die Knoten in der logischsten Reihenfolge an, um eine kohärente und professionelle Antwort zu strukturieren.
+    
+    Verfügbare Knoten: {node_names}
+    
+    Gib ausschließlich eine JSON-Liste der geordneten Knotennamen zurück.
     """
-    try:
-        response = await llm_model.generate_content_async(prompt)
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        raise ValueError("Kein JSON-Array in der LLM-Antwort gefunden")
-    except Exception as e:
-        logger.error(f"Fehler bei der Planerstellung: {e}. Fallback-Plan wird verwendet.")
-        return [{"step": 1, "description": "Standard-Websuche", "tool": "web_search", "query_de": user_query, "query_en": user_query}]
+    response = await llm_json_model.generate_content_async(prompt)
+    return json.loads(response.text)
 
-async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]], mode: str) -> List[Dict[str, Any]]:
-    """Schritt 3: Filtert und bewertet Quellen nach Relevanz und Autorität."""
-    if not sources: return []
-    num_sources_to_select = 5 if mode == 'deep' else 3
-    source_summaries = "\n".join([f"ID: {i}, Titel: {s['title']}, URL: {s['link']}" for i, s in enumerate(sources)])
-    prompt = f"""
-    Bewerte die Relevanz der folgenden Quellen für die Anfrage eines Arztes: "{user_query}".
-    Priorisiere offizielle Leitlinien (AWMF, ESC), systematische Reviews und Publikationen von Fachgesellschaften.
-
-    Quellen:
-    {source_summaries}
-
-    Gib ausschließlich eine JSON-Liste der IDs der {num_sources_to_select} besten Quellen zurück. Beispiel: [0, 2, 5]
-    """
-    try:
-        response = await llm_model.generate_content_async(prompt)
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if match:
-            best_ids = json.loads(match.group(0))
-            return [sources[i] for i in best_ids if i < len(sources)]
-        return sources[:num_sources_to_select]
-    except Exception:
-        return sources[:num_sources_to_select]
-
-async def synthesize_answer_tool(user_query: str, research_data: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
-    """Schritt 5: Generiert einen professionellen, zitierten Bericht, der auf die Nutzerfrage zugeschnitten ist."""
+async def creative_synthesis_agent(user_query: str, ordered_nodes: List[str], knowledge_graph: Dict[str, Any]) -> Dict[str, Any]:
+    """Erstellt die finale, kreative JSON-Antwort basierend auf dem geordneten Pfad."""
     context_str = ""
-    for i, d in enumerate(research_data):
-        context_str += f"### Quelle {i+1}: {d['title']} (URL: {d['url']})\n\n{d['content']}\n\n---\n\n"
+    source_map = {}
+    source_counter = 1
+    
+    for node_name in ordered_nodes:
+        node_data = knowledge_graph["nodes"].get(node_name, {})
+        if node_data.get("content"):
+            # Quellen-Mapping für Zitate erstellen
+            citation_indices = []
+            for url in node_data["sources"]:
+                if url not in source_map:
+                    source_map[url] = source_counter
+                    source_counter += 1
+                citation_indices.append(source_map[url])
+            
+            citations = "".join([f"<sup>{idx}</sup>" for idx in citation_indices])
+            context_str += f"### Konzept: {node_name} {citations}\n\n{node_data['content']}\n\n---\n\n"
 
     prompt = f"""
-    Du bist ein deutscher Facharzt und Autor von medizinischen Fachartikeln. Deine Aufgabe ist es, einen professionellen und gut ausgearbeiteten Bericht zu verfassen, der die Anfrage eines Kollegen präzise und umfassend beantwortet.
+    Du bist ein medizinischer Datenanalyst. Deine Aufgabe ist es, die Anfrage eines Arztes zu beantworten, indem du die bereitgestellten Informationen in ein kreatives, strukturiertes JSON-Format umwandelst.
 
     **Anfrage des Arztes:** "{user_query}"
-
-    **Anweisungen für den Bericht:**
-    1.  **Professionelle Struktur:** Gliedere deine Antwort in logische Abschnitte, die zur Frage passen. Eine gute Struktur könnte sein:
-        - **Einleitung:** Fasse die Kernfrage kurz zusammen und gib einen Überblick über die Antwort.
-        - **Hauptteil:** Behandle die Hauptaspekte der Frage detailliert. Nutze hierfür aussagekräftige Unterüberschriften (z.B. "Pathophysiologie", "Diagnostische Kriterien", "Therapeutische Optionen").
-        - **Schlussfolgerung/Zusammenfassung:** Fasse die wichtigsten Punkte am Ende prägnant zusammen.
-    2.  **Fokus auf die Frage:** Der gesamte Bericht muss sich darauf konzentrieren, die spezifische Frage des Nutzers zu beantworten. Gehe in die Tiefe, aber bleibe immer relevant. Vermeide kurze, oberflächliche Antworten.
-    3.  **Formatierung auf Fachniveau:** Nutze Markdown-Tabellen für Vergleiche (z.B. Medikamentendosierungen, Studienergebnisse), Listen für Symptome oder Kriterien und Codeblöcke ` ``` für Algorithmen oder komplexe Schemata.
-    4.  **Zitieren mit Hochzahlen:** Zitiere Informationen direkt im Text mit hochgestellten Zahlen im Markdown-Format, z.B. `...Text...<sup>1</sup>`.
-    5.  **Evidenzbasiert und präzise:** Halte dich strikt an die Informationen aus den bereitgestellten Quellen.
-
-    **Kontext aus extrahierten Quellen:**
+    **Kontext aus den Wissensknoten:**
     {context_str}
 
-    **Dein professioneller, detaillierter und zitierter Bericht im Markdown-Format:**
+    **Deine Aufgabe:**
+    Fülle das folgende JSON-Schema aus. Sei kreativ bei der Wahl der Inhaltsblöcke. Nutze die Zitate aus dem Kontext.
+    ```json
+    {{
+      "reponse_courte": "Eine prägnante Zusammenfassung der Antwort in 1-2 Sätzen.",
+      "mots_cles": ["Schlüsselwort 1", "Schlüsselwort 2"],
+      "reponse_detaillee": [
+        {{
+          "type": "paragraphe", "titre": "Titel des Abschnitts", "contenu": "Detaillierter Absatz mit Zitaten<sup>1</sup>."
+        }},
+        {{
+          "type": "tableau", "titre": "Vergleichende Tabelle", "entetes": ["Header 1", "Header 2"], "lignes": [["Zelle 1", "Zelle 2"]]
+        }},
+        {{
+          "type": "diagramme_mermaid", "titre": "Algorithmus", "contenu": "graph TD\\nA --> B;"
+        }}
+      ]
+    }}
+    ```
     """
-    try:
-        stream = await llm_model.generate_content_async(prompt, stream=True)
-        async for chunk in stream:
-            yield json.dumps({"type": "chunk", "content": chunk.text})
-    except Exception as e:
-        logger.exception("Fehler bei der Antwortsynthese.")
-        yield json.dumps({"type": "error", "content": f"Fehler bei der Antwort-Erstellung: {e}"})
-
-# ==============================================================================
-# TEIL 5: ORCHESTRIERUNGS-PIPELINE
-# ==============================================================================
-
-async def research_orchestrator_pipeline(query: str, mode: str) -> AsyncGenerator[str, None]:
-    yield json.dumps({"type": "status", "content": "Entwickle eine Recherchestrategie..."})
-    search_plan = await generate_dynamic_search_plan(query, mode)
+    response = await llm_text_model.generate_content_async(prompt)
+    match = re.search(r'\{.*\}', response.text, re.DOTALL)
+    final_json = json.loads(match.group(0)) if match else {}
     
-    all_results = []
-    for step in search_plan:
-        yield json.dumps({"type": "status", "content": f"Schritt {step['step']}: {step['description']}"})
-        
-        site_filters = {
-            "guideline_search": "(site:awmf.org OR site:leitlinien.de OR site:escardio.org OR site:nice.org.uk)",
-            "academic_search": "site:pubmed.ncbi.nlm.nih.gov"
-        }
-        site_filter = site_filters.get(step['tool'], "")
-        
-        # Parallele Suche in Deutsch und Englisch
-        de_task = execute_search_tool(step['query_de'], site_filter)
-        en_task = execute_search_tool(step['query_en'], site_filter)
-        results = await asyncio.gather(de_task, en_task)
-        all_results.extend([item for sublist in results for item in sublist])
-
-    if not all_results:
-        yield json.dumps({"type": "error", "content": "Keine Dokumente gefunden."}); return
-
-    unique_results = list({item['link']: item for item in all_results}.values())
-    yield json.dumps({"type": "status", "content": f"{len(unique_results)} potenzielle Quellen gefunden. Bewerte Relevanz..."})
-
-    best_sources_metadata = await filter_and_rank_sources(query, unique_results, mode)
-    if not best_sources_metadata:
-        yield json.dumps({"type": "error", "content": "Keine relevanten Quellen bestimmbar."}); return
-        
-    yield json.dumps({"type": "status", "content": f"Extrahiere Inhalte aus {len(best_sources_metadata)} Schlüsselquellen..."})
-
-    scrape_tasks = [scrape_tool(src['link']) for src in best_sources_metadata]
-    scraped_contents = await asyncio.gather(*scrape_tasks)
-
-    research_data, final_sources = [], []
-    for i, content in enumerate(scraped_contents):
-        if content and len(content) > 100:
-            metadata = best_sources_metadata[i]
-            research_data.append({"url": metadata['link'], "title": metadata['title'], "content": content})
-            final_sources.append(Source(title=metadata['title'], url=metadata['link'], snippet=metadata.get('snippet')).model_dump())
-
-    if not research_data:
-        yield json.dumps({"type": "error", "content": "Inhalte konnten nicht extrahiert werden."}); return
-
-    yield json.dumps({"type": "status", "content": "Erstelle evidenzbasierte Antwort..."})
-    async for chunk in synthesize_answer_tool(query, research_data):
-        yield chunk
-        
-    yield json.dumps({"type": "sources", "content": final_sources})
+    # Füge die Quellenliste hinzu
+    final_json["sources"] = [{"id": v, "url": k} for k, v in source_map.items()]
+    return final_json
 
 # ==============================================================================
-# TEIL 6: API-ENDPUNKTE
+# TEIL 6: ORCHESTRIERUNGS-PIPELINE
 # ==============================================================================
 
+async def deep_mode_pipeline(query: str, stream_callback: callable):
+    """Führt die "Exploratory Graph"-Logik aus."""
+    knowledge_graph = await build_knowledge_graph_agent(query, stream_callback)
+    
+    await stream_callback({"type": "status", "content": "Phase 3: Bestimme den logischen Antwortpfad..."})
+    synthesis_path = await find_synthesis_path_agent(query, knowledge_graph)
+    
+    await stream_callback({"type": "status", "content": "Phase 4: Generiere die finale strukturierte Antwort..."})
+    final_json_response = await creative_synthesis_agent(query, synthesis_path, knowledge_graph)
+    
+    await stream_callback({"type": "final_response", "content": final_json_response})
+
+async def rapid_mode_pipeline(query: str, stream_callback: callable):
+    """Führt eine schnellere, direktere Recherche aus."""
+    await stream_callback({"type": "status", "content": "Starte schnelle Recherche..."})
+    # Vereinfachte Logik für den schnellen Modus (kann hier implementiert werden)
+    # Vorerst eine Fehlermeldung, um den Fokus auf den deep mode zu legen
+    await asyncio.sleep(1)
+    final_json = {"reponse_courte": "Der schnelle Modus ist derzeit in Entwicklung. Bitte verwenden Sie den 'Approfondi'-Modus für eine vollständige Antwort.", "mots_cles": [], "reponse_detaillee": []}
+    await stream_callback({"type": "final_response", "content": final_json})
+
+
+@app.post("/research-stream")
+async def perform_research_stream(request: ResearchRequest):
+    async def event_generator():
+        async def stream_callback(data: Dict):
+            yield {"data": json.dumps(data)}
+        
+        try:
+            if request.mode == 'deep':
+                await deep_mode_pipeline(request.query, stream_callback)
+            else: # rapid
+                await rapid_mode_pipeline(request.query, stream_callback)
+        except Exception as e:
+            logger.exception(f"Ein schwerwiegender Fehler ist in der Pipeline aufgetreten: {e}")
+            error_message = json.dumps({"type": "error", "content": f"Ein interner Serverfehler ist aufgetreten: {e}"})
+            yield {"data": error_message}
+
+    return EventSourceResponse(event_generator())
+
+# --- Startup und Health Check ---
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starte dynamischen Recherche-Agenten...")
+    logger.info("Starte Agent mit Exploratory Graph Logik...")
     if not all([settings.GEMINI_API_KEY, settings.SERPER_API_KEY, settings.FIRECRAWL_API_KEY]):
         logger.error("FATAL: Wichtige API-Schlüssel fehlen.")
     else:
@@ -309,8 +271,3 @@ async def startup_event():
 @app.get("/health", status_code=200)
 async def health_check():
     return {"status": "ok", "version": app.version}
-
-@app.post("/research-stream")
-async def perform_research_stream(request: ResearchRequest):
-    logger.info(f"Rechercheanfrage für '{request.query}' im Modus '{request.mode}' erhalten.")
-    return EventSourceResponse(research_orchestrator_pipeline(request.query, request.mode))

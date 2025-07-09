@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = Field(..., description="API-Schlüssel für Google Gemini.")
     SERPER_API_KEY: str = Field(..., description="API-Schlüssel für die Serper.dev Such-API.")
     FIRECRAWL_API_KEY: str = Field(..., description="API-Schlüssel für die Firecrawl.dev Scraping-API.")
-    MASTER_AGENT_MODEL: str = Field("gemini-1.5-pro", description="Leistungsstarkes Modell für den Master-Agenten.")
-    WORKER_AGENT_MODEL: str = Field("gemini-1.5-flash", description="Schnelles und effizientes Modell für Worker-Agenten.")
+    MASTER_AGENT_MODEL: str = Field("gemini-2.0-flash", description="Leistungsstarkes Modell für den Master-Agenten.")
+    WORKER_AGENT_MODEL: str = Field("gemini-2.0-flash", description="Schnelles und effizientes Modell für Worker-Agenten.")
 
     class Config:
         env_file = ".env"

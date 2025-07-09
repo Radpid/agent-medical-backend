@@ -4,10 +4,11 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Die Pipeline wurde robuster gemacht, indem sie versucht, mehrere
-#            Quellen pro Schritt zu scrapen, um die Fehleranfälligkeit zu verringern.
+# KORREKTUR: Die Pipeline wurde grundlegend überarbeitet, um die Stabilität zu
+#            erhöhen. Alle Quellen werden zuerst gesammelt, dann global gefiltert
+#            und erst danach gescraped.
 # SPRACHE: Deutsch
-# VERSION: 7.4.0
+# VERSION: 7.5.0
 # ==============================================================================
 
 import os
@@ -53,7 +54,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.4.0"
+    version="7.5.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -137,7 +138,7 @@ async def generate_dynamic_search_plan(user_query: str, mode: str) -> List[Dict[
 
 async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]], mode: str) -> List[Dict[str, Any]]:
     if not sources: return []
-    num_sources_to_select = 3 if mode == 'deep' else 2 # Wähle weniger, aber relevantere Quellen pro Schritt
+    num_sources_to_select = 5 if mode == 'deep' else 3
     source_summaries = "\n".join([f"ID: {i}, Titel: {s['title']}, URL: {s['link']}" for i, s in enumerate(sources)])
     prompt = f"""
     Bewerte die Relevanz der folgenden Quellen für die Anfrage: "{user_query}".
@@ -151,23 +152,7 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
     
     return [sources[i] for i in best_ids if i < len(sources)]
 
-async def creative_synthesis_agent(user_query: str, knowledge_graph: Dict[str, Any]) -> Dict[str, Any]:
-    context_str = ""
-    source_map = {}
-    source_counter = 1
-    
-    for node_name, node_data in knowledge_graph.items():
-        if node_data.get("content"):
-            citation_indices = []
-            for url in node_data["sources"]:
-                if url not in source_map:
-                    source_map[url] = source_counter
-                    source_counter += 1
-                citation_indices.append(source_map[url])
-            
-            citations = "".join([f"<sup>{idx}</sup>" for idx in citation_indices])
-            context_str += f"### Konzept: {node_name} {citations}\n\n{node_data['content']}\n\n---\n\n"
-
+async def creative_synthesis_agent(user_query: str, context_str: str, source_map: Dict[str, int]) -> Dict[str, Any]:
     prompt = f"""
     Du bist ein medizinischer Datenanalyst. Wandle die Anfrage eines Arztes und den bereitgestellten Kontext in ein strukturiertes JSON-Format um.
     **Anfrage:** "{user_query}"
@@ -194,14 +179,14 @@ async def creative_synthesis_agent(user_query: str, knowledge_graph: Dict[str, A
     return final_json
 
 # ==============================================================================
-# TEIL 4: PIPELINES FÜR "DEEP" UND "RAPID" MODUS
+# TEIL 4: PIPELINE FÜR "DEEP" UND "RAPID" MODUS
 # ==============================================================================
 
 async def base_pipeline(query: str, mode: str) -> AsyncGenerator[Dict[str, Any], None]:
     """
-    Eine generische Pipeline, die von beiden Modi verwendet wird.
-    Die Komplexität wird durch den generierten Plan gesteuert.
+    Eine robuste, generische Pipeline, die von beiden Modi verwendet wird.
     """
+    # SCHRITT 1: Plan erstellen
     yield {"type": "status", "content": "Entwickle eine Recherchestrategie..."}
     try:
         search_plan = await generate_dynamic_search_plan(query, mode)
@@ -210,48 +195,63 @@ async def base_pipeline(query: str, mode: str) -> AsyncGenerator[Dict[str, Any],
         yield {"type": "error", "content": f"Konnte keinen Rechercheplan erstellen: {e}"}
         return
 
-    knowledge_graph = {}
+    # SCHRITT 2: Alle Suchen ausführen und Ergebnisse sammeln
+    all_search_results = []
+    search_tasks = []
     for step in search_plan:
-        yield {"type": "status", "content": f"Schritt {step['step']}: {step['description']}"}
-        
+        yield {"type": "status", "content": f"Führe Recherche aus: {step['description']}"}
         site_filters = {
             "guideline_search": "(site:awmf.org OR site:leitlinien.de OR site:escardio.org OR site:nice.org.uk)",
             "academic_search": "site:pubmed.ncbi.nlm.nih.gov"
         }
         site_filter = site_filters.get(step['tool'], "")
-        
-        de_task = execute_search_tool(step['query_de'], site_filter)
-        en_task = execute_search_tool(step['query_en'], site_filter)
-        results = await asyncio.gather(de_task, en_task)
-        
-        all_step_results = [item for sublist in results for item in sublist]
-        
-        if all_step_results:
-            best_sources_for_step = await filter_and_rank_sources(step['description'], all_step_results, mode)
-            
-            # KORREKTUR: Versuche, mehrere Quellen pro Schritt zu scrapen, um die Robustheit zu erhöhen.
-            if best_sources_for_step:
-                scrape_tasks = [scrape_tool(source['link']) for source in best_sources_for_step]
-                scraped_contents = await asyncio.gather(*scrape_tasks)
-                
-                combined_content = ""
-                scraped_urls = []
-                for i, content in enumerate(scraped_contents):
-                    if content:
-                        combined_content += content + "\n\n"
-                        scraped_urls.append(best_sources_for_step[i]['link'])
-                
-                if combined_content:
-                    node_name = step['description']
-                    knowledge_graph[node_name] = {"content": combined_content, "sources": scraped_urls}
+        search_tasks.append(execute_search_tool(step['query_de'], site_filter))
+        search_tasks.append(execute_search_tool(step['query_en'], site_filter))
+    
+    search_results_lists = await asyncio.gather(*search_tasks)
+    for result_list in search_results_lists:
+        all_search_results.extend(result_list)
 
-    if not knowledge_graph:
-        yield {"type": "error", "content": "Keine Informationen gefunden oder Inhalte konnten nicht extrahiert werden."}
+    if not all_search_results:
+        yield {"type": "error", "content": "Keine Dokumente in den Suchanfragen gefunden."}
         return
 
+    unique_results = list({item['link']: item for item in all_search_results}.values())
+    yield {"type": "status", "content": f"{len(unique_results)} potenzielle Quellen gefunden. Bewerte Relevanz..."}
+
+    # SCHRITT 3: Quellen global filtern und bewerten
+    best_sources = await filter_and_rank_sources(query, unique_results, mode)
+    if not best_sources:
+        yield {"type": "error", "content": "Keine relevanten Quellen nach der Filterung gefunden."}
+        return
+
+    # SCHRITT 4: Inhalte der besten Quellen parallel scrapen
+    yield {"type": "status", "content": f"Extrahiere Inhalte aus {len(best_sources)} Schlüsselquellen..."}
+    scrape_tasks = [scrape_tool(source['link']) for source in best_sources]
+    scraped_contents = await asyncio.gather(*scrape_tasks)
+    
+    # SCHRITT 5: Kontext für die Synthese erstellen
+    context_str = ""
+    source_map = {}
+    source_counter = 1
+    for i, content in enumerate(scraped_contents):
+        if content:
+            source_url = best_sources[i]['link']
+            if source_url not in source_map:
+                source_map[source_url] = source_counter
+                source_counter += 1
+            
+            citation = f"<sup>{source_map[source_url]}</sup>"
+            context_str += f"### Quelle: {best_sources[i]['title']} {citation}\n\n{content}\n\n---\n\n"
+
+    if not context_str:
+        yield {"type": "error", "content": "Inhalte der relevanten Quellen konnten nicht extrahiert werden."}
+        return
+
+    # SCHRITT 6: Finale Antwort synthetisieren
     yield {"type": "status", "content": "Strukturiere die finale Antwort..."}
     try:
-        final_json_response = await creative_synthesis_agent(query, knowledge_graph)
+        final_json_response = await creative_synthesis_agent(query, context_str, source_map)
         yield {"type": "final_response", "content": final_json_response}
     except Exception as e:
         logger.error(f"Fehler bei der finalen Synthese: {e}")

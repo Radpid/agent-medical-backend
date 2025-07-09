@@ -4,10 +4,10 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Der Prompt für die Diagrammerstellung wurde verbessert, um
-#            syntaktisch korrekten Mermaid-Code zu gewährleisten.
+# KORREKTUR: Der Prompt für die Diagrammerstellung wurde weiter präzisiert,
+#            um die Verwendung von ungültigen Anführungszeichen zu verhindern.
 # SPRACHE: Deutsch
-# VERSION: 7.7.0
+# VERSION: 7.8.0
 # ==============================================================================
 
 import os
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.7.0"
+    version="7.8.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -168,7 +168,7 @@ async def creative_synthesis_agent(user_query: str, context_str: str, source_map
     {context_str}
     **Deine Aufgabe:**
     Fülle das folgende JSON-Schema aus. Sei kreativ bei der Wahl der Inhaltsblöcke. Zitiere Informationen mit hochgestellten Zahlen, z.B. `...Text...<sup>1</sup>`.
-    **WICHTIG für Diagramme:** Text in Knoten MUSS in Anführungszeichen gesetzt werden, wenn er Leerzeichen enthält (z.B. `A["Verdacht auf LAE"] --> B["CT-Angio"]`).
+    **WICHTIG für Diagramme:** Text in Knoten MUSS in standardmäßigen doppelten Anführungszeichen (`"`) eingeschlossen werden, wenn er Leerzeichen oder Sonderzeichen enthält. Verwende KEINE typografischen Anführungszeichen wie „ oder “. Beispiel: `A["Verdacht auf LAE"] --> B["CT-Angio"]`.
 
     ```json
     {{

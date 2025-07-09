@@ -4,10 +4,10 @@
 #        - 'rapid' Modus: Ein schneller, dynamischer Plan.
 #        - 'deep' Modus: Ein fortschrittlicher "Exploratory Graph"-Agent, der
 #          ein Wissensnetz aufbaut und daraus eine tiefgehende Synthese erstellt.
-# KORREKTUR: Der Prompt für die Planerstellung wurde präzisiert, um den
-#            KeyError: 'description' zu beheben.
+# KORREKTUR: Die Verarbeitung der Quellen-IDs wurde robust gemacht, um den
+#            TypeError zu beheben.
 # SPRACHE: Deutsch
-# VERSION: 7.2.0
+# VERSION: 7.3.0
 # ==============================================================================
 
 import os
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Medizinischer Agent mit Exploratory Graph Logik",
     description="Ein KI-Agent, der je nach Modus unterschiedliche, hochentwickelte Recherchestrategien anwendet.",
-    version="7.2.0"
+    version="7.3.0"
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -145,7 +145,11 @@ async def filter_and_rank_sources(user_query: str, sources: List[Dict[str, Any]]
     Gib ausschließlich eine JSON-Liste der IDs der {num_sources_to_select} besten Quellen zurück.
     """
     response = await llm_json_model.generate_content_async(prompt)
-    best_ids = json.loads(response.text)
+    best_ids_raw = json.loads(response.text)
+    
+    # KORREKTUR: Sicherstellen, dass alle IDs Integer sind, bevor sie verglichen werden.
+    best_ids = [int(i) for i in best_ids_raw if isinstance(i, (int, str)) and str(i).isdigit()]
+    
     return [sources[i] for i in best_ids if i < len(sources)]
 
 async def creative_synthesis_agent(user_query: str, knowledge_graph: Dict[str, Any]) -> Dict[str, Any]:
